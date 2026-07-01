@@ -178,6 +178,24 @@ async function loadAll(): Promise<void> {
   await loadAnalysis(candles)
 }
 
+// ── Overlay toggles ───────────────────────────────────────────────────────────
+function initOverlayToggles(): void {
+  const toggles: Array<{ id: string; fn: (v: boolean) => void }> = [
+    { id: 'toggle-zones',     fn: v => chart.toggleZones(v) },
+    { id: 'toggle-structure', fn: v => chart.toggleStructure(v) },
+    { id: 'toggle-signals',   fn: v => chart.toggleSignals(v) },
+    { id: 'toggle-patterns',  fn: v => chart.togglePatterns(v) },
+  ]
+  for (const { id, fn } of toggles) {
+    document.getElementById(id)?.addEventListener('click', () => {
+      const btn = document.getElementById(id) as HTMLButtonElement
+      const active = btn.classList.toggle('active')
+      btn.textContent = active ? 'ON' : 'OFF'
+      fn(active)
+    })
+  }
+}
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 function init(): void {
   chart = new TradingChart('chart-container')
@@ -193,14 +211,7 @@ function init(): void {
   initPairButtons()
   initTfButtons()
   applyUrlParams()
-
-  // Structure toggle
-  el('structure-toggle').addEventListener('click', () => {
-    const btn = el<HTMLButtonElement>('structure-toggle')
-    const active = btn.classList.toggle('active')
-    btn.textContent = active ? 'ON' : 'OFF'
-    chart.toggleStructure(active)
-  })
+  initOverlayToggles()
 
   // Update pair/TF on chart after URL params applied
   chart.setPair(activePair)

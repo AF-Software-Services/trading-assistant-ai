@@ -6,8 +6,6 @@ import type { OverlayTemplate } from 'klinecharts'
  */
 export const srZoneOverlay: OverlayTemplate = {
   name: 'srZone',
-  // Two points: [{ value: priceLow }, { value: priceHigh }]
-  // KLineChart converts these to pixel y-coordinates for us
   totalStep: 3,
   needDefaultPointFigure: false,
   needDefaultXAxisFigure: false,
@@ -29,8 +27,8 @@ export const srZoneOverlay: OverlayTemplate = {
         attrs: { x: 0, y: yTop, width: 99999, height },
         styles: {
           style: 'fill',
-          color: color + '30',
-          borderColor: color + '70',
+          color: color + '40',
+          borderColor: color + '99',
           borderSize: 1,
           borderStyle: 'solid',
         },
@@ -60,7 +58,7 @@ export const hLineOverlay: OverlayTemplate = {
   needDefaultPointFigure: true,
   needDefaultXAxisFigure: false,
   needDefaultYAxisFigure: false,
-  createPointFigures ({ overlay, coordinates, barsRange, defaultStyles, xAxis, yAxis }) {
+  createPointFigures ({ overlay, coordinates, yAxis }) {
     if (!yAxis || coordinates.length === 0) return []
     const extData = overlay.extendData as { color: string; label: string }
     const color = extData?.color ?? '#ffffff'
@@ -107,6 +105,7 @@ export const hLineOverlay: OverlayTemplate = {
 /**
  * Swing-point text annotation.
  * Single point: [{ timestamp, value }]
+ * extendData: { label: string; above: boolean; bullish: boolean; isLatest: boolean }
  */
 export const swingLabelOverlay: OverlayTemplate = {
   name: 'swingLabel',
@@ -116,30 +115,46 @@ export const swingLabelOverlay: OverlayTemplate = {
   needDefaultYAxisFigure: false,
   createPointFigures ({ overlay, coordinates }) {
     if (coordinates.length === 0) return []
-    const extData = overlay.extendData as { label: string; above: boolean }
-    const label = extData?.label ?? ''
-    const above = extData?.above ?? true
+    const extData = overlay.extendData as { label: string; above: boolean; bullish: boolean; isLatest: boolean }
+    const label    = extData?.label ?? ''
+    const above    = extData?.above ?? true
+    const bullish  = extData?.bullish ?? true
+    const isLatest = extData?.isLatest ?? false
     const { x, y } = coordinates[0]!
-    const offsetY = above ? y - 18 : y + 6
-    return [
-      {
-        type: 'text',
-        attrs: {
-          x,
-          y: offsetY,
-          text: label,
-          align: 'center',
-          baseline: 'top',
-        },
-        styles: {
-          style: 'fill',
-          color: '#58a6ff',
-          size: 10,
-          family: 'monospace',
-          weight: '700',
-        },
+    const pointY = y
+    const offsetY = above ? y - 20 : y + 6
+
+    const dotColor = bullish ? '#3fb950' : '#f85149'
+
+    const figures: ReturnType<NonNullable<OverlayTemplate['createPointFigures']>> = []
+
+    // Small dot at the pivot point
+    figures.push({
+      type: 'circle',
+      attrs: { x, y: pointY, r: 3 },
+      styles: { style: 'fill', color: dotColor },
+    })
+
+    // Label text
+    figures.push({
+      type: 'text',
+      attrs: {
+        x,
+        y: offsetY,
+        text: label,
+        align: 'center',
+        baseline: 'top',
       },
-    ]
+      styles: {
+        style: 'fill',
+        color: isLatest ? '#ffffff' : '#58a6ff',
+        size: isLatest ? 12 : 10,
+        family: 'monospace',
+        weight: isLatest ? '800' : '700',
+      },
+    })
+
+    return figures
   },
 }
 
@@ -161,18 +176,17 @@ export const hnsOverlay: OverlayTemplate = {
       color: string
       confidence: number
       necklinePrice: number
+      confirmed: boolean
     }
     if (!extData) return []
 
-    const { label, color, confidence, necklinePrice } = extData
+    const { label, color, confidence, necklinePrice, confirmed } = extData
     const [left, head, right] = coordinates as [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }]
 
-    // Neckline y pixel
     const necklineY = yAxis ? (yAxis as { convertToPixel: (v: number) => number }).convertToPixel(necklinePrice) : (left.y + right.y) / 2
 
     const figures: ReturnType<NonNullable<OverlayTemplate['createPointFigures']>> = []
 
-    // Lines connecting left → head → right
     figures.push({
       type: 'line',
       attrs: { coordinates: [{ x: left.x, y: left.y }, { x: head.x, y: head.y }] },
@@ -184,20 +198,20 @@ export const hnsOverlay: OverlayTemplate = {
       styles: { style: 'solid', color, size: 1 },
     })
 
-    // Neckline (horizontal across the pattern)
     figures.push({
       type: 'line',
       attrs: { coordinates: [{ x: left.x, y: necklineY }, { x: right.x, y: necklineY }] },
       styles: { style: 'dashed', color: '#e3b341', size: 1, dashedValue: [4, 4] },
     })
 
-    // Label at head
+    // Label with diamond symbol
+    const symbol = confirmed ? '◆' : '◇'
     figures.push({
       type: 'text',
       attrs: {
         x: head.x,
         y: head.y - 18,
-        text: `${label} ${confidence}%`,
+        text: `${symbol} ${label} ${confidence}%`,
         align: 'center',
         baseline: 'top',
       },
@@ -215,7 +229,8 @@ export const hnsOverlay: OverlayTemplate = {
 }
 
 /**
- * Signal marker (BE↑ / BE↓) below/above candles.
+ * Signal marker (engulfing) below/above candles.
+ * extendData: { bullish: boolean }
  */
 export const signalMarkerOverlay: OverlayTemplate = {
   name: 'signalMarker',
@@ -225,25 +240,32 @@ export const signalMarkerOverlay: OverlayTemplate = {
   needDefaultYAxisFigure: false,
   createPointFigures ({ overlay, coordinates }) {
     if (coordinates.length === 0) return []
-    const extData = overlay.extendData as { label: string; bullish: boolean }
-    const label   = extData?.label ?? ''
+    const extData = overlay.extendData as { bullish: boolean }
     const bullish = extData?.bullish ?? true
     const { x, y } = coordinates[0]!
-    const offsetY = bullish ? y + 6 : y - 18
+    const offsetY = bullish ? y + 8 : y - 24
+
     return [
+      // Background rect for readability
+      {
+        type: 'rect',
+        attrs: { x: x - 24, y: offsetY - 1, width: 48, height: 16 },
+        styles: {
+          style: 'fill',
+          color: bullish ? '#1a3a1a' : '#3a1a1a',
+          borderColor: bullish ? '#3fb950' : '#f85149',
+          borderSize: 1,
+          borderStyle: 'solid',
+        },
+      },
+      // Arrow + label text
       {
         type: 'text',
-        attrs: {
-          x,
-          y: offsetY,
-          text: label,
-          align: 'center',
-          baseline: 'top',
-        },
+        attrs: { x, y: offsetY, text: bullish ? '▲ Bull' : '▼ Bear', align: 'center', baseline: 'top' },
         styles: {
           style: 'fill',
           color: bullish ? '#3fb950' : '#f85149',
-          size: 11,
+          size: 10,
           family: 'sans-serif',
           weight: '700',
         },

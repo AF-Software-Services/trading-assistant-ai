@@ -220,16 +220,31 @@ html, body {
   to { transform: rotate(360deg); }
 }
 
+.overlay-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.overlay-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 0;
+}
+.overlay-name {
+  font-size: 11px;
+  color: var(--muted);
+}
 .toggle-btn {
   font-size: 9px;
-  padding: 1px 6px;
+  padding: 2px 8px;
   border-radius: 3px;
   border: 1px solid var(--border);
   background: var(--accent);
   color: #fff;
   cursor: pointer;
-  margin-left: 6px;
-  vertical-align: middle;
+  min-width: 30px;
 }
 .toggle-btn:not(.active) {
   background: transparent;

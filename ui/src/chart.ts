@@ -33,25 +33,36 @@ export class TradingChart {
   private chart: Chart
   private pair: string = 'EUR/USD'
   private currentPrice: number = 0
+  private data: CandleData[] = []
 
   // Overlay IDs for draggable lines
   private entryId: string | null = null
   private slId: string | null = null
   private tpId: string | null = null
 
-  // Zone overlay IDs (cleared on each data load)
+  // Zone overlay IDs
   private zoneIds: string[] = []
-  // Annotation overlay IDs
-  private annotationIds: string[] = []
-  // Swing label overlay IDs (subset of annotationIds, tracked separately for toggle)
+  // Swing label overlay IDs
   private swingIds: string[] = []
+  // Signal overlay IDs
+  private signalIds: string[] = []
   // Pattern overlay IDs
   private patternIds: string[] = []
-  // Structure toggle state
-  private showStructure = true
-  // Last received swing points (for re-render on toggle)
+
+  // Visibility state for each overlay type
+  private visZones     = true
+  private visStructure = true
+  private visSignals   = true
+  private visPatterns  = true
+
+  // Stored data for re-render on toggle
+  private lastZones:     Zone[]       = []
   private lastStructure: SwingPoint[] = []
-  // ATR-derived suggested stop in pips (set from analysis response)
+  private lastSignals:   Signal[]     = []
+  private lastCandles:   CandleData[] = []
+  private lastPatterns:  AnalysisResult['patterns'] = []
+
+  // ATR-derived suggested stop in pips
   private suggestedStopPips = 30
 
   private onTradeLinesChange: TradeLinesChangeCallback | null = null
@@ -170,7 +181,6 @@ export class TradingChart {
 
   setPair(pair: string): void {
     this.pair = pair
-    // Adjust decimal precision for JPY
     const dec = pair.includes('JPY') ? 3 : 5
     this.chart.setPriceVolumePrecision(dec, 0)
   }
@@ -180,6 +190,7 @@ export class TradingChart {
   }
 
   applyCandles(candles: CandleData[]): void {
+    this.data = candles
     const data = candles.map(c => ({
       timestamp: c.timestamp,
       open:  c.open,
@@ -196,11 +207,11 @@ export class TradingChart {
   }
 
   applyZones(zones: Zone[]): void {
-    // Remove old zone overlays
-    for (const id of this.zoneIds) {
-      this.chart.removeOverlay({ id })
-    }
+    this.lastZones = zones
+    for (const id of this.zoneIds) this.chart.removeOverlay({ id })
     this.zoneIds = []
+
+    if (!this.visZones) return
 
     for (const zone of zones) {
       const isResistance = zone.type === 'resistance'
@@ -209,7 +220,6 @@ export class TradingChart {
         : zone.timeframe === 'D' ? 'D'
         : 'I'
 
-      // Two points give KLineChart two y-coordinates we use for the zone rectangle
       const midTimestamp = this.data[Math.floor(this.data.length / 2)]?.timestamp ?? Date.now()
       const result = this.chart.createOverlay({
         name: 'srZone',
@@ -225,67 +235,77 @@ export class TradingChart {
   }
 
   applySwingPoints(swingPoints: SwingPoint[]): void {
-    // Store for re-render on toggle
     this.lastStructure = swingPoints
-
-    // Remove old swing label overlays
-    for (const id of this.swingIds) {
-      this.chart.removeOverlay({ id })
-    }
+    for (const id of this.swingIds) this.chart.removeOverlay({ id })
     this.swingIds = []
 
-    if (!this.showStructure) return
+    if (!this.visStructure) return
+
+    // Find the latest timestamp for each label type
+    const isLatestMap: Record<string, number> = {}
+    for (const sp of swingPoints) {
+      if (isLatestMap[sp.label] === undefined || sp.timestamp > isLatestMap[sp.label]!) {
+        isLatestMap[sp.label] = sp.timestamp
+      }
+    }
 
     for (const sp of swingPoints) {
-      const above = sp.label === 'HH' || sp.label === 'LH'
+      const above   = sp.label === 'HH' || sp.label === 'LH'
+      const bullish = sp.label === 'HH' || sp.label === 'HL'
+      const isLatest = isLatestMap[sp.label] === sp.timestamp
+
       const result = this.chart.createOverlay({
         name: 'swingLabel',
         points: [{ timestamp: sp.timestamp, value: sp.price }],
-        extendData: { label: sp.label, above },
+        extendData: { label: sp.label, above, bullish, isLatest },
         lock: true,
       })
-      if (typeof result === 'string') {
-        this.swingIds.push(result)
-        this.annotationIds.push(result)
-      }
+      if (typeof result === 'string') this.swingIds.push(result)
     }
   }
 
-  setSuggestedStop(atr: number): void {
-    // Convert ATR (price units) to pips and use 1× ATR as the suggested stop
-    const factor = pipFactor(this.pair)
-    const pips = Math.round(atr * factor)
-    // Clamp between 20 and 100 pips for weekly swing context
-    this.suggestedStopPips = Math.max(20, Math.min(100, pips))
-  }
+  applySignals(signals: Signal[], candles: CandleData[]): void {
+    this.lastSignals  = signals
+    this.lastCandles  = candles
+    for (const id of this.signalIds) this.chart.removeOverlay({ id })
+    this.signalIds = []
 
-  toggleStructure(show: boolean): void {
-    this.showStructure = show
-    if (!show) {
-      for (const id of this.swingIds) {
-        this.chart.removeOverlay({ id })
-      }
-      this.swingIds = []
-    } else {
-      this.applySwingPoints(this.lastStructure)
+    if (!this.visSignals) return
+
+    const bullishTypes = new Set(['bullish_engulfing', 'hammer'])
+
+    for (const sig of signals) {
+      const candle = candles.find(c => c.timestamp === sig.timestamp)
+        ?? candles.find(c => Math.abs(c.timestamp - sig.timestamp) < 3600_000)
+      if (!candle) continue
+
+      const bullish = bullishTypes.has(sig.type)
+      const price   = bullish ? candle.low : candle.high
+
+      const result = this.chart.createOverlay({
+        name: 'signalMarker',
+        points: [{ timestamp: candle.timestamp, value: price }],
+        extendData: { bullish },
+        lock: true,
+      })
+      if (typeof result === 'string') this.signalIds.push(result)
     }
   }
 
   applyPatterns(patterns: AnalysisResult['patterns']): void {
-    // Remove old pattern overlays
-    for (const id of this.patternIds) {
-      this.chart.removeOverlay({ id })
-    }
+    this.lastPatterns = patterns
+    for (const id of this.patternIds) this.chart.removeOverlay({ id })
     this.patternIds = []
 
-    if (!patterns) return
+    if (!this.visPatterns || !patterns) return
 
     for (const p of patterns) {
       if (!p.extendedData) continue
       const ed = p.extendedData
       const isInverse = p.type === 'inverse_head_and_shoulders'
       const label = isInverse ? 'IH&S' : 'H&S'
-      const color = p.status === 'confirmed' ? '#f85149' : '#e3b341'
+      const confirmed = p.status === 'confirmed'
+      const color = confirmed ? '#f85149' : '#e3b341'
 
       const result = this.chart.createOverlay({
         name: 'hns',
@@ -299,6 +319,7 @@ export class TradingChart {
           color,
           confidence: p.confidence,
           necklinePrice: ed.necklinePrice,
+          confirmed,
         },
         lock: true,
       })
@@ -306,28 +327,43 @@ export class TradingChart {
     }
   }
 
-  applySignals(signals: Signal[], candles: CandleData[]): void {
-    const bullishTypes = new Set(['bullish_engulfing', 'hammer'])
-
-    for (const sig of signals) {
-      // Find candle by timestamp match
-      const candle = candles.find(c => c.timestamp === sig.timestamp)
-        ?? candles.find(c => Math.abs(c.timestamp - sig.timestamp) < 3600_000)
-      if (!candle) continue
-
-      const bullish = bullishTypes.has(sig.type)
-      const label   = bullish ? 'BE↑' : 'BE↓'
-      const price   = bullish ? candle.low : candle.high
-
-      const result = this.chart.createOverlay({
-        name: 'signalMarker',
-        points: [{ timestamp: candle.timestamp, value: price }],
-        extendData: { label, bullish },
-        lock: true,
-      })
-      if (typeof result === 'string') this.annotationIds.push(result)
-    }
+  setSuggestedStop(atr: number): void {
+    const factor = pipFactor(this.pair)
+    const pips = Math.round(atr * factor)
+    this.suggestedStopPips = Math.max(20, Math.min(100, pips))
   }
+
+  // ── Toggle methods ────────────────────────────────────────────────────────────
+
+  toggleZones(show: boolean): void {
+    this.visZones = show
+    for (const id of this.zoneIds) this.chart.removeOverlay({ id })
+    this.zoneIds = []
+    if (show) this.applyZones(this.lastZones)
+  }
+
+  toggleStructure(show: boolean): void {
+    this.visStructure = show
+    for (const id of this.swingIds) this.chart.removeOverlay({ id })
+    this.swingIds = []
+    if (show) this.applySwingPoints(this.lastStructure)
+  }
+
+  toggleSignals(show: boolean): void {
+    this.visSignals = show
+    for (const id of this.signalIds) this.chart.removeOverlay({ id })
+    this.signalIds = []
+    if (show) this.applySignals(this.lastSignals, this.lastCandles)
+  }
+
+  togglePatterns(show: boolean): void {
+    this.visPatterns = show
+    for (const id of this.patternIds) this.chart.removeOverlay({ id })
+    this.patternIds = []
+    if (show) this.applyPatterns(this.lastPatterns)
+  }
+
+  // ── Trade lines ───────────────────────────────────────────────────────────────
 
   getTradeLinesState(): TradeLinesState {
     const getPrice = (id: string | null): number => {
@@ -344,14 +380,12 @@ export class TradingChart {
   }
 
   private resetTradeLines(): void {
-    // Remove existing trade lines
     if (this.entryId) this.chart.removeOverlay({ id: this.entryId })
     if (this.slId)    this.chart.removeOverlay({ id: this.slId })
     if (this.tpId)    this.chart.removeOverlay({ id: this.tpId })
 
     const factor = pipFactor(this.pair)
     const entry  = this.currentPrice
-    // Weekly swing defaults: 30 pip stop (beyond 4H noise), 5:1 TP = 150 pips
     const stopPips = this.suggestedStopPips > 0 ? this.suggestedStopPips : 30
     const sl = entry - (stopPips / factor)
     const tp = entry + ((stopPips * 5) / factor)
@@ -386,7 +420,6 @@ export class TradingChart {
     this.slId    = typeof slResult    === 'string' ? slResult    : null
     this.tpId    = typeof tpResult    === 'string' ? tpResult    : null
 
-    // Fire initial callback
     setTimeout(onChange, 100)
   }
 
