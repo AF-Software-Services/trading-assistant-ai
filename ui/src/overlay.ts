@@ -58,13 +58,57 @@ export const hLineOverlay: OverlayTemplate = {
   needDefaultPointFigure: true,
   needDefaultXAxisFigure: false,
   needDefaultYAxisFigure: false,
-  createPointFigures ({ overlay, coordinates, yAxis }) {
+  createPointFigures ({ overlay, coordinates, yAxis, bounding }) {
     if (!yAxis || coordinates.length === 0) return []
     const extData = overlay.extendData as { color: string; label: string }
     const color = extData?.color ?? '#ffffff'
     const label = extData?.label ?? ''
     const y = coordinates[0]?.y ?? 0
     const price = overlay.points[0]?.value ?? 0
+    const dec = price > 10 ? 3 : 5
+
+    const chartTop    = (bounding as { top?: number }).top ?? 0
+    const chartBottom = (bounding as { bottom?: number }).bottom ?? 99999
+    const isAbove = y < chartTop
+    const isBelow = y > chartBottom
+
+    // Line is off screen — draw an edge arrow indicator
+    if (isAbove || isBelow) {
+      const edgeY  = isAbove ? chartTop + 14 : chartBottom - 14
+      const arrow  = isAbove ? '▲' : '▼'
+      const bgH    = 18
+      const textW  = 110
+      return [
+        {
+          type: 'rect',
+          attrs: { x: 4, y: edgeY - bgH / 2, width: textW, height: bgH },
+          styles: {
+            style: 'fill',
+            color: '#0d1117',
+            borderColor: color,
+            borderSize: 1,
+            borderStyle: 'solid',
+          },
+        },
+        {
+          type: 'text',
+          attrs: {
+            x: 8,
+            y: edgeY - bgH / 2 + 2,
+            text: `${arrow} ${label} ${price.toFixed(dec)}`,
+            align: 'left',
+            baseline: 'top',
+          },
+          styles: {
+            style: 'fill',
+            color,
+            size: 11,
+            family: 'monospace',
+            weight: '700',
+          },
+        },
+      ]
+    }
 
     return [
       {
@@ -86,7 +130,7 @@ export const hLineOverlay: OverlayTemplate = {
         attrs: {
           x: 6,
           y: y - 13,
-          text: `${label} ${price.toFixed(5)}`,
+          text: `${label} ${price.toFixed(dec)}`,
           align: 'left',
           baseline: 'top',
         },
