@@ -323,6 +323,11 @@ export function createApiRouter(): Hono<{ Bindings: Env }> {
     buyScore  = Math.min(100, buyScore  + bullishCount * 8);
     sellScore = Math.min(100, sellScore + bearishCount * 8);
 
+    // Suggest stop distance: 1× ATR on 4H candles, expressed in pips
+    const atr4H = calculateATR(candles4H);
+    const pipFactor = pair.includes("JPY") ? 100 : 10000;
+    const suggestedStopPips = Math.round(atr4H * pipFactor);
+
     return c.json({
       pair,
       trend: trendBias,
@@ -332,6 +337,8 @@ export function createApiRouter(): Hono<{ Bindings: Env }> {
       buyScore,
       sellScore,
       patterns,
+      atr: atr4H,
+      suggestedStopPips,
     });
   });
 

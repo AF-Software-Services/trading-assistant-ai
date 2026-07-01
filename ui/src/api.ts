@@ -56,6 +56,8 @@ export interface AnalysisResult {
       necklinePrice: number
     }
   }>
+  atr?: number
+  suggestedStopPips?: number
 }
 
 export interface TradeIdea {

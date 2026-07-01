@@ -48,12 +48,16 @@ export class TradePanel {
     el('tp-sl').textContent    = sl.toFixed(dec)
     el('tp-tp').textContent    = tp.toFixed(dec)
     el('tp-stop-pips').textContent = stopPips.toFixed(1)
-    el('tp-rr').textContent    = rr.toFixed(2)
-    el('tp-risk').textContent  = `£${risk.toFixed(2)} (max)`
-    el('tp-reward').textContent = `£${reward.toFixed(2)}`
+    const rrLabel = rr >= 5 ? `${rr.toFixed(1)} ✓` : rr >= 3 ? `${rr.toFixed(1)}` : `${rr.toFixed(1)} ✗ (min 3:1)`
+    el('tp-rr').textContent    = rrLabel
+    el('tp-rr').style.color    = rr >= 5 ? 'var(--buy)' : rr >= 3 ? '#e3b341' : 'var(--sell)'
+    el('tp-risk').textContent  = `£${risk.toFixed(0)} (max loss)`
+    el('tp-reward').textContent = `£${reward.toFixed(0)}`
 
-    const pipValue = this.pair.includes('JPY') ? 0.067 : 1.0  // per mini lot per pip
-    const lots = stopPips > 0 ? (risk / (stopPips * pipValue)) / 10 : 0  // convert mini to standard
+    // Position size: standard lots needed to risk exactly £100 at this stop distance
+    // Non-JPY: £1/pip/mini lot — JPY: ~£0.067/pip/mini lot (approx at current rate)
+    const pipValue = this.pair.includes('JPY') ? 0.067 : 1.0
+    const lots = stopPips > 0 ? (risk / (stopPips * pipValue)) / 10 : 0
     el('tp-lots').textContent = lots > 0 ? `${lots.toFixed(2)} lots` : '—'
   }
 

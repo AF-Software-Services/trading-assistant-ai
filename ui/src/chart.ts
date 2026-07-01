@@ -51,6 +51,8 @@ export class TradingChart {
   private showStructure = true
   // Last received swing points (for re-render on toggle)
   private lastStructure: SwingPoint[] = []
+  // ATR-derived suggested stop in pips (set from analysis response)
+  private suggestedStopPips = 30
 
   private onTradeLinesChange: TradeLinesChangeCallback | null = null
 
@@ -249,6 +251,14 @@ export class TradingChart {
     }
   }
 
+  setSuggestedStop(atr: number): void {
+    // Convert ATR (price units) to pips and use 1× ATR as the suggested stop
+    const factor = pipFactor(this.pair)
+    const pips = Math.round(atr * factor)
+    // Clamp between 20 and 100 pips for weekly swing context
+    this.suggestedStopPips = Math.max(20, Math.min(100, pips))
+  }
+
   toggleStructure(show: boolean): void {
     this.showStructure = show
     if (!show) {
@@ -341,8 +351,10 @@ export class TradingChart {
 
     const factor = pipFactor(this.pair)
     const entry  = this.currentPrice
-    const sl     = entry - (15 / factor)
-    const tp     = entry + (45 / factor)
+    // Weekly swing defaults: 30 pip stop (beyond 4H noise), 5:1 TP = 150 pips
+    const stopPips = this.suggestedStopPips > 0 ? this.suggestedStopPips : 30
+    const sl = entry - (stopPips / factor)
+    const tp = entry + ((stopPips * 5) / factor)
 
     const onChange = () => {
       this.onTradeLinesChange?.(this.getTradeLinesState())

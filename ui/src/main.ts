@@ -139,6 +139,7 @@ async function loadAnalysis(candles?: Awaited<ReturnType<typeof getCandles>>): P
     const data = await getAnalysis(activePair)
     updateAnalysisPanel(data)
     // Overlay zones and swing points onto chart
+    if (data.atr) chart.setSuggestedStop(data.atr)
     chart.applyZones(data.zones)
     if (data.structure?.swingPoints) {
       chart.applySwingPoints(data.structure.swingPoints)
