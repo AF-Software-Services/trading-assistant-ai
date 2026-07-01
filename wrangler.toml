@@ -15,11 +15,11 @@ crons = [
 [[d1_databases]]
 binding = "DB"
 database_name = "trading-assistant-ai"
-database_id = "YOUR_D1_DATABASE_ID"
+database_id = "96417c47-1152-465b-9ff2-cec6fe394990"
 
 [[kv_namespaces]]
 binding = "KV"
-id = "YOUR_KV_NAMESPACE_ID"
+id = "a82afed2ad864e6bb1d11cd57e2f8219"
 
 [vars]
 ENVIRONMENT = "production"
