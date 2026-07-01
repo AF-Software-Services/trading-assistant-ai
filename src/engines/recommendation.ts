@@ -141,6 +141,8 @@ function buildSetupForDirection(params: {
   structureD:  ReturnType<typeof analyseMarketStructure>;
   trend4H: ReturnType<typeof analyseTrend>;
   latestSignal: CandlestickSignal | null;
+  latestBullish: CandlestickSignal | null;
+  latestBearish: CandlestickSignal | null;
   latestPattern: ReturnType<typeof detectAllPatterns>[number] | null;
 }): Recommendation | null {
   const { pair, direction, price, atr, allZones, nearSupport, nearResistance,
@@ -263,25 +265,43 @@ export async function generateRecommendation(params: {
   const zonesW   = detectZones(candlesW,  "W",  atr);
   const allZones = [...zonesW, ...zonesD, ...zones4H];
 
-  const trend4H      = analyseTrend(candles4H, structure4H);
-  const signals4H    = detectAllSignals(candles4H, allZones);
-  const latestSignal = signals4H.length > 0 ? signals4H[signals4H.length - 1] ?? null : null;
-  const patterns     = detectAllPatterns(candles4H);
+  const trend4H   = analyseTrend(candles4H, structure4H);
+  const signals4H = detectAllSignals(candles4H, allZones);
+  const patterns  = detectAllPatterns(candles4H);
   const latestPattern = patterns.length > 0 ? patterns[patterns.length - 1] ?? null : null;
 
   const nearSupport    = getNearestZone(price, allZones, "support");
   const nearResistance = getNearestZone(price, allZones, "resistance");
 
+  // Find the most recent bullish and bearish signal within the last 20 candles (4H = ~3 days)
+  const bullishTypes = new Set(["bullish_engulfing", "hammer", "pin_bar"]);
+  const bearishTypes = new Set(["bearish_engulfing", "shooting_star"]);
+  const recentSignals = signals4H.slice(-20);
+  const latestBullish = [...recentSignals].reverse().find(s => bullishTypes.has(s.type)) ?? null;
+  const latestBearish = [...recentSignals].reverse().find(s => bearishTypes.has(s.type)) ?? null;
+
+  // Direction focus: candlestick signal is the trigger — let it determine which side to evaluate.
+  // If only bullish seen → buy only. If only bearish → sell only.
+  // If both or neither → evaluate both (trend/zone will differentiate score).
+  let directionsToEvaluate: Array<"buy" | "sell">;
+  if (latestBullish && !latestBearish) {
+    directionsToEvaluate = ["buy"];
+  } else if (latestBearish && !latestBullish) {
+    directionsToEvaluate = ["sell"];
+  } else {
+    directionsToEvaluate = ["buy", "sell"];
+  }
+
   const shared = { pair, price, atr, allZones, nearSupport, nearResistance,
-                   structure4H, structureD, trend4H, latestSignal, latestPattern };
+                   structure4H, structureD, trend4H, latestBullish, latestBearish, latestPattern };
 
   const results: Recommendation[] = [];
-  for (const direction of ["buy", "sell"] as const) {
-    const rec = buildSetupForDirection({ ...shared, direction });
+  for (const direction of directionsToEvaluate) {
+    const latestSignal = direction === "buy" ? latestBullish : latestBearish;
+    const rec = buildSetupForDirection({ ...shared, direction, latestSignal });
     if (rec) results.push(rec);
   }
 
-  // Sort: higher confidence first
   return results.sort((a, b) => b.confidence - a.confidence);
 }
 
