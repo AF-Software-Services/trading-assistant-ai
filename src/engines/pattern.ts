@@ -74,6 +74,8 @@ export function detectHeadAndShoulders(candles: Candle[]): ChartPattern | null {
   const highs = getSwingHighs(candles);
   if (highs.length < 3) return null;
 
+  // Right shoulder must be within the last 30 candles to be actionable
+  const recentThreshold = candles.length - 30;
   let best: ChartPattern | null = null;
 
   for (let i = 0; i < highs.length - 2; i++) {
@@ -85,6 +87,8 @@ export function detectHeadAndShoulders(candles: Candle[]): ChartPattern | null {
     if (head.price <= rs.price) continue;
     if (Math.abs(ls.price - rs.price) >= atr * 2) continue;
     if (rs.index - ls.index < 10) continue;
+    // Skip stale patterns — right shoulder must be recent
+    if (rs.index < recentThreshold) continue;
 
     const trough1 = localMinBetween(candles, ls.index, head.index);
     const trough2 = localMinBetween(candles, head.index, rs.index);
@@ -92,6 +96,8 @@ export function detectHeadAndShoulders(candles: Candle[]): ChartPattern | null {
     const target = necklinePrice - (head.price - necklinePrice);
 
     const lastClose = candles[candles.length - 1]!.close;
+    // Skip if target already reached — pattern is exhausted
+    if (lastClose <= target) continue;
     const status: "forming" | "confirmed" = lastClose < necklinePrice ? "confirmed" : "forming";
 
     const shoulderDiff = Math.abs(ls.price - rs.price);
@@ -134,6 +140,7 @@ export function detectInverseHeadAndShoulders(candles: Candle[]): ChartPattern |
   const lows = getSwingLows(candles);
   if (lows.length < 3) return null;
 
+  const recentThreshold = candles.length - 30;
   let best: ChartPattern | null = null;
 
   for (let i = 0; i < lows.length - 2; i++) {
@@ -145,6 +152,8 @@ export function detectInverseHeadAndShoulders(candles: Candle[]): ChartPattern |
     if (head.price >= rs.price) continue;
     if (Math.abs(ls.price - rs.price) >= atr * 2) continue;
     if (rs.index - ls.index < 10) continue;
+    // Skip stale patterns — right shoulder must be recent
+    if (rs.index < recentThreshold) continue;
 
     const peak1 = localMaxBetween(candles, ls.index, head.index);
     const peak2 = localMaxBetween(candles, head.index, rs.index);
@@ -152,6 +161,8 @@ export function detectInverseHeadAndShoulders(candles: Candle[]): ChartPattern |
     const target = necklinePrice + (necklinePrice - head.price);
 
     const lastClose = candles[candles.length - 1]!.close;
+    // Skip if target already reached — pattern is exhausted
+    if (lastClose >= target) continue;
     const status: "forming" | "confirmed" = lastClose > necklinePrice ? "confirmed" : "forming";
 
     const shoulderDiff = Math.abs(ls.price - rs.price);
