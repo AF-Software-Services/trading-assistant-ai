@@ -43,6 +43,7 @@ export class TradingChart {
   private tpId:     string | null = null
   private slZoneId: string | null = null
   private tpZoneId: string | null = null
+  private visTradeLines = true
 
   // Zone overlay IDs
   private zoneIds: string[] = []
@@ -367,6 +368,15 @@ export class TradingChart {
     if (show) this.applySignals(this.lastSignals, this.lastCandles)
   }
 
+  toggleTradeLines(show: boolean): void {
+    this.visTradeLines = show
+    if (show) {
+      if (this.currentPrice > 0) this.resetTradeLines()
+    } else {
+      this.removeTradeOverlays()
+    }
+  }
+
   togglePatterns(show: boolean): void {
     this.visPatterns = show
     for (const id of this.patternIds) this.chart.removeOverlay({ id })
@@ -408,6 +418,7 @@ export class TradingChart {
   }
 
   private resetTradeLines(): void {
+    if (!this.visTradeLines) return
     this.removeTradeOverlays()
 
     const factor   = pipFactor(this.pair)

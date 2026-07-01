@@ -232,6 +232,7 @@ function initOverlayToggles(): void {
     { id: 'toggle-structure', fn: v => chart.toggleStructure(v) },
     { id: 'toggle-signals',   fn: v => chart.toggleSignals(v) },
     { id: 'toggle-patterns',  fn: v => chart.togglePatterns(v) },
+    { id: 'toggle-trade',     fn: v => chart.toggleTradeLines(v) },
   ]
   for (const { id, fn } of toggles) {
     document.getElementById(id)?.addEventListener('click', () => {
