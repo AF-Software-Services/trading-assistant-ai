@@ -53,7 +53,7 @@ export function registerTools(server: McpServer, env: Env): void {
   // ── 1. analyse_pair ─────────────────────────────────────────────────────────
   server.tool(
     "analyse_pair",
-    "Run full analysis on a currency pair: market structure, S/R zones, trend, candlestick signals, and a trade recommendation.",
+    "Run full analysis on a currency pair: market structure, S/R zones, trend, candlestick signals, and trade recommendations for both long and short setups (whichever meet minimum criteria).",
     {
       pair: z.enum(["EUR/USD", "GBP/USD", "GBP/CAD", "USD/JPY", "EUR/GBP", "AUD/USD"]),
       timeframe: z.enum(["1H", "4H", "D", "W"]).optional().default("4H"),
@@ -66,9 +66,9 @@ export function registerTools(server: McpServer, env: Env): void {
       const zones     = detectZones(candles, tf, atr);
       const trend     = analyseTrend(candles, structure);
       const signals   = detectAllSignals(candles, zones);
-      const rec       = await generateRecommendation({ pair: pair as CurrencyPair, provider });
+      const recs = await generateRecommendation({ pair: pair as CurrencyPair, provider });
 
-      return json({ pair, timeframe: tf, structure, zones, trend, signals: signals.slice(-5), recommendation: rec });
+      return json({ pair, timeframe: tf, structure, zones, trend, signals: signals.slice(-5), recommendations: recs });
     }
   );
 

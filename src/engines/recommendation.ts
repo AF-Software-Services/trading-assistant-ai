@@ -127,68 +127,34 @@ function buildInvalidationConditions(params: {
   return conditions;
 }
 
-export async function generateRecommendation(params: {
+// Evaluate a single direction (buy or sell) against the shared market data.
+// Returns null if the setup doesn't meet minimum criteria.
+function buildSetupForDirection(params: {
   pair: CurrencyPair;
-  provider: MarketDataProvider;
-}): Promise<Recommendation | null> {
-  const { pair, provider } = params;
-
-  // Fetch candles for primary timeframe (4H) and daily
-  const [candles4H, candlesD, candlesW] = await Promise.all([
-    provider.getCandles(pair, "4H", 200),
-    provider.getCandles(pair, "D",  100),
-    provider.getCandles(pair, "W",   52),
-  ]);
-
-  const latestTick = await provider.getLatestPrice(pair);
-  const price = latestTick.mid;
-
-  // Analyse market structure on 4H (primary) and Daily
-  const structure4H = analyseMarketStructure(candles4H, "4H");
-  const structureD  = analyseMarketStructure(candlesD, "D");
-
-  // ATR from daily candles
-  const atr = calculateATR(candlesD);
-
-  // Support/resistance zones from multiple timeframes
-  const zones4H = detectZones(candles4H, "4H", atr);
-  const zonesD  = detectZones(candlesD,  "D",  atr);
-  const zonesW  = detectZones(candlesW,  "W",  atr);
-  const allZones = [...zonesW, ...zonesD, ...zones4H];
-
-  // Trend analysis (primary: 4H, confirmed by D)
-  const trend4H = analyseTrend(candles4H, structure4H);
-
-  // Candlestick signals (4H)
-  const signals4H = detectAllSignals(candles4H, allZones);
-  const latestSignal = signals4H.length > 0 ? signals4H[signals4H.length - 1] ?? null : null;
-
-  // Patterns (v1: always empty)
-  const patterns = detectAllPatterns(candles4H);
-  const latestPattern = patterns.length > 0 ? patterns[patterns.length - 1] ?? null : null;
-
-  // Find nearest zones
-  const nearSupport    = getNearestZone(price, allZones, "support");
-  const nearResistance = getNearestZone(price, allZones, "resistance");
-
-  // Determine direction
-  const direction = pickDirection(trend4H, structure4H, nearSupport, nearResistance);
-  if (direction === "neutral") return null;
+  direction: "buy" | "sell";
+  price: number;
+  atr: number;
+  allZones: SupportResistanceZone[];
+  nearSupport: SupportResistanceZone | null;
+  nearResistance: SupportResistanceZone | null;
+  structure4H: ReturnType<typeof analyseMarketStructure>;
+  structureD:  ReturnType<typeof analyseMarketStructure>;
+  trend4H: ReturnType<typeof analyseTrend>;
+  latestSignal: CandlestickSignal | null;
+  latestPattern: ReturnType<typeof detectAllPatterns>[number] | null;
+}): Recommendation | null {
+  const { pair, direction, price, atr, allZones, nearSupport, nearResistance,
+          structure4H, structureD, trend4H, latestSignal, latestPattern } = params;
 
   const relevantZone = direction === "buy" ? nearSupport : nearResistance;
 
-  // Estimated R:R for scoring
   const stopIdea = direction === "buy"
     ? (relevantZone ? relevantZone.low  - atr * 0.5 : price - atr * 1.5)
     : (relevantZone ? relevantZone.high + atr * 0.5 : price + atr * 1.5);
 
-  const target1 = direction === "buy"
-    ? price + atr * 5
-    : price - atr * 5;
-
+  const target1 = direction === "buy" ? price + atr * 5 : price - atr * 5;
   const estimatedRR = Math.abs(target1 - price) / Math.abs(stopIdea - price);
 
-  // Score setup
   const scoreBreakdown = scoreTradeSetup({
     direction,
     zones: allZones,
@@ -199,7 +165,6 @@ export async function generateRecommendation(params: {
     estimatedRR,
   });
 
-  // Risk calculation
   const riskCalc = calculateRisk({
     pair,
     direction,
@@ -209,7 +174,9 @@ export async function generateRecommendation(params: {
     target2: direction === "buy" ? price + atr * 8 : price - atr * 8,
   });
 
-  // Determine action
+  // Require a minimum score to surface the setup
+  if (scoreBreakdown.total < 50) return null;
+
   let action: SignalAction;
   if (scoreBreakdown.total >= RISK_CONFIG.minConfidenceScore && riskCalc.isValid) {
     action = "consider_trade";
@@ -219,8 +186,8 @@ export async function generateRecommendation(params: {
     action = "no_trade";
   }
 
-  const createdAt  = Date.now();
-  const expiresAt  = createdAt + 7 * 24 * 60 * 60 * 1000;
+  const createdAt = Date.now();
+  const expiresAt = createdAt + 7 * 24 * 60 * 60 * 1000;
 
   const reasons = buildReasons({
     direction,
@@ -272,6 +239,52 @@ export async function generateRecommendation(params: {
   };
 }
 
+export async function generateRecommendation(params: {
+  pair: CurrencyPair;
+  provider: MarketDataProvider;
+}): Promise<Recommendation[]> {
+  const { pair, provider } = params;
+
+  const [candles4H, candlesD, candlesW] = await Promise.all([
+    provider.getCandles(pair, "4H", 200),
+    provider.getCandles(pair, "D",  100),
+    provider.getCandles(pair, "W",   52),
+  ]);
+
+  const latestTick = await provider.getLatestPrice(pair);
+  const price = latestTick.mid;
+
+  const structure4H = analyseMarketStructure(candles4H, "4H");
+  const structureD  = analyseMarketStructure(candlesD, "D");
+  const atr         = calculateATR(candlesD);
+
+  const zones4H  = detectZones(candles4H, "4H", atr);
+  const zonesD   = detectZones(candlesD,  "D",  atr);
+  const zonesW   = detectZones(candlesW,  "W",  atr);
+  const allZones = [...zonesW, ...zonesD, ...zones4H];
+
+  const trend4H      = analyseTrend(candles4H, structure4H);
+  const signals4H    = detectAllSignals(candles4H, allZones);
+  const latestSignal = signals4H.length > 0 ? signals4H[signals4H.length - 1] ?? null : null;
+  const patterns     = detectAllPatterns(candles4H);
+  const latestPattern = patterns.length > 0 ? patterns[patterns.length - 1] ?? null : null;
+
+  const nearSupport    = getNearestZone(price, allZones, "support");
+  const nearResistance = getNearestZone(price, allZones, "resistance");
+
+  const shared = { pair, price, atr, allZones, nearSupport, nearResistance,
+                   structure4H, structureD, trend4H, latestSignal, latestPattern };
+
+  const results: Recommendation[] = [];
+  for (const direction of ["buy", "sell"] as const) {
+    const rec = buildSetupForDirection({ ...shared, direction });
+    if (rec) results.push(rec);
+  }
+
+  // Sort: higher confidence first
+  return results.sort((a, b) => b.confidence - a.confidence);
+}
+
 export async function generateAllRecommendations(
   pairs: CurrencyPair[],
   provider: MarketDataProvider
@@ -282,11 +295,10 @@ export async function generateAllRecommendations(
 
   const recommendations: Recommendation[] = [];
   for (const result of results) {
-    if (result.status === "fulfilled" && result.value !== null) {
-      recommendations.push(result.value);
+    if (result.status === "fulfilled") {
+      recommendations.push(...result.value);
     }
   }
 
-  // Sort by confidence descending
   return recommendations.sort((a, b) => b.confidence - a.confidence);
 }

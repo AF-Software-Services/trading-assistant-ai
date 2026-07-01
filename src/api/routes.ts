@@ -61,8 +61,8 @@ export function createApiRouter(): Hono<{ Bindings: Env }> {
     const zones     = detectZones(candles, tf, atr);
     const trend     = analyseTrend(candles, structure);
     const signals   = detectAllSignals(candles, zones);
-    const rec       = await generateRecommendation({ pair, provider });
-    return c.json({ pair, timeframe: tf, structure, zones, trend, signals: signals.slice(-5), recommendation: rec });
+    const recs      = await generateRecommendation({ pair, provider });
+    return c.json({ pair, timeframe: tf, structure, zones, trend, signals: signals.slice(-5), recommendations: recs });
   });
 
   // POST /api/v1/analyse  (all pairs)
