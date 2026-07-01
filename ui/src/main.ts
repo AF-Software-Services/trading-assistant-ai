@@ -138,7 +138,7 @@ async function loadAnalysis(candles?: Awaited<ReturnType<typeof getCandles>>): P
   try {
     const data = await getAnalysis(activePair)
     updateAnalysisPanel(data)
-    // Overlay zones and swing points onto chart
+    autoDirection(data)
     if (data.atr) chart.setSuggestedStop(data.atr)
     chart.applyZones(data.zones)
     if (data.structure?.swingPoints) {
@@ -179,20 +179,50 @@ async function loadAll(): Promise<void> {
 }
 
 // ── Direction toggle (BUY / SELL) ─────────────────────────────────────────────
-function initDirectionToggle(): void {
+function setDirection(dir: 'buy' | 'sell'): void {
   const buyBtn  = document.getElementById('dir-buy')  as HTMLButtonElement
   const sellBtn = document.getElementById('dir-sell') as HTMLButtonElement
-
-  buyBtn.addEventListener('click', () => {
+  if (dir === 'buy') {
     buyBtn.classList.add('active')
     sellBtn.classList.remove('active')
-    chart.setDirection('buy')
-  })
-  sellBtn.addEventListener('click', () => {
+  } else {
     sellBtn.classList.add('active')
     buyBtn.classList.remove('active')
-    chart.setDirection('sell')
-  })
+  }
+  chart.setDirection(dir)
+}
+
+function initDirectionToggle(): void {
+  document.getElementById('dir-buy')?.addEventListener('click',  () => setDirection('buy'))
+  document.getElementById('dir-sell')?.addEventListener('click', () => setDirection('sell'))
+}
+
+function autoDirection(data: AnalysisResult): void {
+  const bullishTypes = new Set(['bullish_engulfing', 'hammer'])
+  const bearishTypes = new Set(['bearish_engulfing', 'shooting_star'])
+
+  // Check the last 5 signals for a recent engulfing candle
+  const recent = data.signals.slice(-5)
+  const latestBullish = [...recent].reverse().find(s => bullishTypes.has(s.type))
+  const latestBearish = [...recent].reverse().find(s => bearishTypes.has(s.type))
+
+  let dir: 'buy' | 'sell'
+
+  if (latestBullish && latestBearish) {
+    // Both present — most recent wins
+    dir = latestBullish.timestamp >= latestBearish.timestamp ? 'buy' : 'sell'
+  } else if (latestBullish) {
+    // Bullish engulfing overrides trend → long
+    dir = 'buy'
+  } else if (latestBearish) {
+    // Bearish engulfing overrides trend → short
+    dir = 'sell'
+  } else {
+    // No recent signal — follow the trend
+    dir = data.trend === 'downtrend' ? 'sell' : 'buy'
+  }
+
+  setDirection(dir)
 }
 
 // ── Overlay toggles ───────────────────────────────────────────────────────────
