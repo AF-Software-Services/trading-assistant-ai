@@ -64,6 +64,8 @@ export class TradingChart {
 
   // ATR-derived suggested stop in pips
   private suggestedStopPips = 30
+  // Trade direction: 1 = long, -1 = short
+  private direction: 1 | -1 = 1
 
   private onTradeLinesChange: TradeLinesChangeCallback | null = null
 
@@ -327,6 +329,11 @@ export class TradingChart {
     }
   }
 
+  setDirection(dir: 'buy' | 'sell'): void {
+    this.direction = dir === 'buy' ? 1 : -1
+    if (this.currentPrice > 0) this.resetTradeLines()
+  }
+
   setSuggestedStop(atr: number): void {
     const factor = pipFactor(this.pair)
     const pips = Math.round(atr * factor)
@@ -384,11 +391,12 @@ export class TradingChart {
     if (this.slId)    this.chart.removeOverlay({ id: this.slId })
     if (this.tpId)    this.chart.removeOverlay({ id: this.tpId })
 
-    const factor = pipFactor(this.pair)
-    const entry  = this.currentPrice
+    const factor   = pipFactor(this.pair)
+    const entry    = this.currentPrice
     const stopPips = this.suggestedStopPips > 0 ? this.suggestedStopPips : 30
-    const sl = entry - (stopPips / factor)
-    const tp = entry + ((stopPips * 5) / factor)
+    const d        = this.direction  // 1 = long, -1 = short
+    const sl = entry - d * (stopPips / factor)
+    const tp = entry + d * ((stopPips * 5) / factor)
 
     const onChange = () => {
       this.onTradeLinesChange?.(this.getTradeLinesState())

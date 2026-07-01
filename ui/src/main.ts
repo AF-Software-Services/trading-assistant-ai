@@ -6,7 +6,7 @@ import type { AnalysisResult } from './api'
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let activePair      = 'EUR/USD'
-let activeTimeframe = '1H'
+let activeTimeframe = '4H'
 let chart: TradingChart
 let tradePanel: TradePanel
 
@@ -178,6 +178,23 @@ async function loadAll(): Promise<void> {
   await loadAnalysis(candles)
 }
 
+// ── Direction toggle (BUY / SELL) ─────────────────────────────────────────────
+function initDirectionToggle(): void {
+  const buyBtn  = document.getElementById('dir-buy')  as HTMLButtonElement
+  const sellBtn = document.getElementById('dir-sell') as HTMLButtonElement
+
+  buyBtn.addEventListener('click', () => {
+    buyBtn.classList.add('active')
+    sellBtn.classList.remove('active')
+    chart.setDirection('buy')
+  })
+  sellBtn.addEventListener('click', () => {
+    sellBtn.classList.add('active')
+    buyBtn.classList.remove('active')
+    chart.setDirection('sell')
+  })
+}
+
 // ── Overlay toggles ───────────────────────────────────────────────────────────
 function initOverlayToggles(): void {
   const toggles: Array<{ id: string; fn: (v: boolean) => void }> = [
@@ -211,6 +228,7 @@ function init(): void {
   initPairButtons()
   initTfButtons()
   applyUrlParams()
+  initDirectionToggle()
   initOverlayToggles()
 
   // Update pair/TF on chart after URL params applied
