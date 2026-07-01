@@ -49,121 +49,102 @@ export const srZoneOverlay: OverlayTemplate = {
 }
 
 /**
- * Trade zone overlay — entry, SL and TP in one overlay.
- * Points: [entry, sl, tp]
- * extendData: { dec: number; stopPips: number; rewardPips: number; reward: number; rr: number }
+ * Coloured zone rectangle between two price levels (trade SL / TP zone).
+ * Points: [{ timestamp, value: price1 }, { timestamp, value: price2 }]
+ * extendData: { color: string; label: string }
+ * (reuses the same shape as srZoneOverlay so both can share the same template)
  */
-export const tradeZoneOverlay: OverlayTemplate = {
-  name: 'tradeZone',
-  totalStep: 4,
+export const tradeRectOverlay: OverlayTemplate = {
+  name: 'tradeRect',
+  totalStep: 3,
+  needDefaultPointFigure: false,
+  needDefaultXAxisFigure: false,
+  needDefaultYAxisFigure: false,
+  createPointFigures ({ overlay, coordinates }) {
+    if (coordinates.length < 2) return []
+    const extData = overlay.extendData as { color: string; label: string }
+    if (!extData) return []
+    const { color, label } = extData
+    const y1    = coordinates[0]!.y
+    const y2    = coordinates[1]!.y
+    const yTop  = Math.min(y1, y2)
+    const h     = Math.max(Math.abs(y1 - y2), 2)
+    const figs: ReturnType<NonNullable<OverlayTemplate['createPointFigures']>> = [
+      {
+        type: 'rect',
+        attrs: { x: 0, y: yTop, width: 99999, height: h },
+        styles: { style: 'fill', color: color + '22', borderColor: color + '66', borderSize: 1, borderStyle: 'solid' },
+      },
+    ]
+    if (label) {
+      figs.push({
+        type: 'text',
+        attrs: { x: 8, y: yTop + 3, text: label, align: 'left', baseline: 'top' },
+        styles: { style: 'fill', color: color + 'cc', size: 10, family: 'monospace', weight: '400' },
+      })
+    }
+    return figs
+  },
+}
+
+/**
+ * Draggable horizontal price line with off-screen edge indicator.
+ * Single point: [{ value: price }]
+ * extendData: { color: string; label: string; info?: string }
+ */
+export const hLineOverlay: OverlayTemplate = {
+  name: 'hLine',
+  totalStep: 1,
   needDefaultPointFigure: true,
   needDefaultXAxisFigure: false,
   needDefaultYAxisFigure: false,
   createPointFigures ({ overlay, coordinates, bounding }) {
-    if (coordinates.length < 3) return []
+    if (coordinates.length === 0) return []
+    const extData = overlay.extendData as { color: string; label: string; info?: string }
+    const color = extData?.color ?? '#ffffff'
+    const label = extData?.label ?? ''
+    const info  = extData?.info  ?? ''
+    const y     = coordinates[0]!.y
+    const price = overlay.points[0]?.value ?? 0
+    const dec   = price > 10 ? 3 : 5
 
-    const extData = overlay.extendData as {
-      dec: number
-      stopPips: number
-      rewardPips: number
-      reward: number
-      rr: number
-    }
-    const dec        = extData?.dec        ?? 5
-    const stopPips   = extData?.stopPips   ?? 0
-    const rewardPips = extData?.rewardPips ?? 0
-    const reward     = extData?.reward     ?? 0
-    const rr         = extData?.rr         ?? 0
-
-    const entryY = coordinates[0]!.y
-    const slY    = coordinates[1]!.y
-    const tpY    = coordinates[2]!.y
-    const entry  = overlay.points[0]?.value ?? 0
-    const sl     = overlay.points[1]?.value ?? 0
-    const tp     = overlay.points[2]?.value ?? 0
-
-    const b: Record<string, number> = bounding as unknown as Record<string, number>
+    const b           = bounding as unknown as Record<string, number>
     const chartTop    = b['top']    ?? 0
     const chartBottom = b['bottom'] ?? 99999
+    const isAbove     = y < chartTop
+    const isBelow     = y > chartBottom
 
-    type Fig = ReturnType<NonNullable<OverlayTemplate['createPointFigures']>>[number]
-    const figs: Fig[] = []
-
-    // ── Colored zone rectangles ──────────────────────────────────────────────
-    const slTop = Math.max(chartTop,    Math.min(entryY, slY))
-    const slBot = Math.min(chartBottom, Math.max(entryY, slY))
-    if (slBot > slTop) {
-      figs.push({
-        type: 'rect',
-        attrs: { x: 0, y: slTop, width: 99999, height: slBot - slTop },
-        styles: { style: 'fill', color: 'rgba(248,81,73,0.13)', borderColor: 'transparent', borderSize: 0 },
-      })
-    }
-    const tpTop = Math.max(chartTop,    Math.min(entryY, tpY))
-    const tpBot = Math.min(chartBottom, Math.max(entryY, tpY))
-    if (tpBot > tpTop) {
-      figs.push({
-        type: 'rect',
-        attrs: { x: 0, y: tpTop, width: 99999, height: tpBot - tpTop },
-        styles: { style: 'fill', color: 'rgba(63,185,80,0.09)', borderColor: 'transparent', borderSize: 0 },
-      })
-    }
-
-    // ── Helper: draw a horizontal line or off-screen edge indicator ──────────
-    function addLine(y: number, color: string, price: number, label: string, info: string) {
-      const above = y < chartTop
-      const below = y > chartBottom
-      if (above || below) {
-        const ey = above ? chartTop + 14 : chartBottom - 14
-        const arrow = above ? '▲' : '▼'
-        const txt = `${arrow} ${label}  ${price.toFixed(dec)}  ${info}`
-        figs.push({
+    if (isAbove || isBelow) {
+      const ey    = isAbove ? chartTop + 14 : chartBottom - 14
+      const arrow = isAbove ? '▲' : '▼'
+      const txt   = `${arrow} ${label} ${price.toFixed(dec)}${info ? '  ' + info : ''}`
+      return [
+        {
           type: 'rect',
           attrs: { x: 4, y: ey - 9, width: txt.length * 7 + 8, height: 18 },
           styles: { style: 'fill', color: '#0d1117', borderColor: color, borderSize: 1, borderStyle: 'solid' },
-        })
-        figs.push({
+        },
+        {
           type: 'text',
           attrs: { x: 8, y: ey - 7, text: txt, align: 'left', baseline: 'top' },
           styles: { style: 'fill', color, size: 11, family: 'monospace', weight: '700' },
-        })
-      } else {
-        figs.push({
-          type: 'line',
-          attrs: { coordinates: [{ x: 0, y }, { x: 99999, y }] },
-          styles: { style: 'solid', color, size: 1 },
-        })
-        figs.push({
-          type: 'text',
-          attrs: { x: 8, y: y + 2, text: `${label}  ${price.toFixed(dec)}  ${info}`, align: 'left', baseline: 'top' },
-          styles: { style: 'fill', color, size: 10, family: 'monospace', weight: '600' },
-        })
-      }
+        },
+      ]
     }
 
-    addLine(entryY, '#e6edf3', entry, 'ENTRY', '')
-    addLine(slY,    '#f85149', sl,    'SL',    stopPips   > 0 ? `${stopPips.toFixed(1)} pips  |  £100 risk`             : '')
-    addLine(tpY,    '#3fb950', tp,    'TP',    rewardPips > 0 ? `${rewardPips.toFixed(1)} pips  |  £${reward.toFixed(0)} reward  |  ${rr.toFixed(1)}:1` : '')
-
-    // Zone labels centred in each coloured band (only if zone has enough height)
-    const slMid = (slTop + slBot) / 2
-    const tpMid = (tpTop + tpBot) / 2
-    if (slBot - slTop > 20 && stopPips > 0) {
-      figs.push({
+    const labelText = `${label} ${price.toFixed(dec)}${info ? '  ' + info : ''}`
+    return [
+      {
+        type: 'line',
+        attrs: { coordinates: [{ x: 0, y }, { x: 99999, y }] },
+        styles: { style: 'solid', color, size: 1 },
+      },
+      {
         type: 'text',
-        attrs: { x: 8, y: slMid - 6, text: `Stop: ${stopPips.toFixed(1)} pips  |  £100 max loss`, align: 'left', baseline: 'top' },
-        styles: { style: 'fill', color: '#f85149', size: 10, family: 'monospace', weight: '400' },
-      })
-    }
-    if (tpBot - tpTop > 20 && rewardPips > 0) {
-      figs.push({
-        type: 'text',
-        attrs: { x: 8, y: tpMid - 6, text: `Target: ${rewardPips.toFixed(1)} pips  |  £${reward.toFixed(0)} reward  |  R:R ${rr.toFixed(1)}`, align: 'left', baseline: 'top' },
-        styles: { style: 'fill', color: '#3fb950', size: 10, family: 'monospace', weight: '400' },
-      })
-    }
-
-    return figs
+        attrs: { x: 8, y: y + 2, text: labelText, align: 'left', baseline: 'top' },
+        styles: { style: 'fill', color, size: 10, family: 'monospace', weight: '600' },
+      },
+    ]
   },
 }
 
