@@ -1,0 +1,188 @@
+import type { Candle, Timeframe } from "../types/market.ts";
+import type { SupportResistanceZone } from "../types/trading.ts";
+import { ZONE_ATR_MULTIPLIER, MIN_ZONE_TOUCHES } from "../config/index.ts";
+import { detectSwingPoints } from "./market-structure.ts";
+import { calculateATR } from "./trend.ts";
+
+const TIMEFRAME_WEIGHT: Record<Timeframe, number> = {
+  W:  40,
+  D:  30,
+  "4H": 20,
+  "1H": 10,
+};
+
+/**
+ * Group nearby pivot prices into zones. Two pivots are merged if they are
+ * within `atr * ZONE_ATR_MULTIPLIER` of each other.
+ */
+function groupPivots(
+  prices: Array<{ price: number; timestamp: number }>,
+  atr: number,
+  tolerance: number
+): Array<{ prices: number[]; firstSeenAt: number; lastTestedAt: number }> {
+  const groups: Array<{ prices: number[]; firstSeenAt: number; lastTestedAt: number }> = [];
+
+  for (const p of prices) {
+    let merged = false;
+    for (const g of groups) {
+      const avg = g.prices.reduce((a, b) => a + b, 0) / g.prices.length;
+      if (Math.abs(p.price - avg) <= atr * tolerance) {
+        g.prices.push(p.price);
+        if (p.timestamp < g.firstSeenAt) g.firstSeenAt = p.timestamp;
+        if (p.timestamp > g.lastTestedAt) g.lastTestedAt = p.timestamp;
+        merged = true;
+        break;
+      }
+    }
+    if (!merged) {
+      groups.push({ prices: [p.price], firstSeenAt: p.timestamp, lastTestedAt: p.timestamp });
+    }
+  }
+
+  return groups;
+}
+
+/**
+ * Detect support and resistance zones from swing points.
+ */
+export function detectZones(
+  candles: Candle[],
+  timeframe: Timeframe,
+  atr: number
+): SupportResistanceZone[] {
+  if (candles.length === 0) return [];
+  const pair = candles[0]?.pair ?? "EUR/USD";
+  const swings = detectSwingPoints(candles);
+
+  const resistancePivots = swings
+    .filter(sp => sp.label === "HH" || sp.label === "LH")
+    .map(sp => ({ price: sp.price, timestamp: sp.timestamp }));
+
+  const supportPivots = swings
+    .filter(sp => sp.label === "HL" || sp.label === "LL")
+    .map(sp => ({ price: sp.price, timestamp: sp.timestamp }));
+
+  const tolerance = ZONE_ATR_MULTIPLIER;
+  const resistanceGroups = groupPivots(resistancePivots, atr, tolerance);
+  const supportGroups    = groupPivots(supportPivots, atr, tolerance);
+
+  const zones: SupportResistanceZone[] = [];
+  const tfWeight = TIMEFRAME_WEIGHT[timeframe];
+
+  for (const g of resistanceGroups) {
+    if (g.prices.length < MIN_ZONE_TOUCHES) continue;
+    const low  = Math.min(...g.prices);
+    const high = Math.max(...g.prices);
+    const midpoint = (low + high) / 2;
+    const touchCount = g.prices.length;
+    const strength = scoreZoneRaw(touchCount, tfWeight, g.lastTestedAt, false);
+    zones.push({
+      pair,
+      timeframe,
+      type: "resistance",
+      low:  +low.toFixed(5),
+      high: +high.toFixed(5),
+      midpoint: +midpoint.toFixed(5),
+      strength,
+      touchCount,
+      firstSeenAt:  g.firstSeenAt,
+      lastTestedAt: g.lastTestedAt,
+      isBroken: false,
+      isRetested: touchCount >= 3,
+      confidence: strength,
+    });
+  }
+
+  for (const g of supportGroups) {
+    if (g.prices.length < MIN_ZONE_TOUCHES) continue;
+    const low  = Math.min(...g.prices);
+    const high = Math.max(...g.prices);
+    const midpoint = (low + high) / 2;
+    const touchCount = g.prices.length;
+    const strength = scoreZoneRaw(touchCount, tfWeight, g.lastTestedAt, false);
+    zones.push({
+      pair,
+      timeframe,
+      type: "support",
+      low:  +low.toFixed(5),
+      high: +high.toFixed(5),
+      midpoint: +midpoint.toFixed(5),
+      strength,
+      touchCount,
+      firstSeenAt:  g.firstSeenAt,
+      lastTestedAt: g.lastTestedAt,
+      isBroken: false,
+      isRetested: touchCount >= 3,
+      confidence: strength,
+    });
+  }
+
+  return zones;
+}
+
+function scoreZoneRaw(
+  touchCount: number,
+  tfWeight: number,
+  lastTestedAt: number,
+  isRetested: boolean
+): number {
+  // Touch count contribution (up to 40 pts)
+  const touchScore = Math.min(touchCount * 10, 40);
+
+  // Timeframe weight (up to 40 pts, already 10–40)
+  const tfScore = tfWeight;
+
+  // Freshness: more recent = stronger (up to 10 pts)
+  const ageMs = Date.now() - lastTestedAt;
+  const ageDays = ageMs / 86_400_000;
+  const freshnessScore = Math.max(0, 10 - ageDays * 0.5);
+
+  // Retest bonus (up to 10 pts)
+  const retestScore = isRetested ? 10 : 0;
+
+  return Math.min(100, Math.round(touchScore + tfScore + freshnessScore + retestScore));
+}
+
+/**
+ * Score a zone (public API uses the zone's own fields).
+ */
+export function scoreZone(zone: SupportResistanceZone): number {
+  return scoreZoneRaw(
+    zone.touchCount,
+    TIMEFRAME_WEIGHT[zone.timeframe],
+    zone.lastTestedAt,
+    zone.isRetested
+  );
+}
+
+/**
+ * Returns true when price is within tolerance of a zone's range.
+ * Default tolerance = 20% of zone height, minimum 0.0001.
+ */
+export function isNearZone(
+  price: number,
+  zone: SupportResistanceZone,
+  tolerance?: number
+): boolean {
+  const zoneHeight = zone.high - zone.low;
+  const tol = tolerance ?? Math.max(zoneHeight * 0.2, 0.0001);
+  return price >= zone.low - tol && price <= zone.high + tol;
+}
+
+/**
+ * Return the nearest zone of the given type, or null if none exist.
+ */
+export function getNearestZone(
+  price: number,
+  zones: SupportResistanceZone[],
+  type: "support" | "resistance"
+): SupportResistanceZone | null {
+  const filtered = zones.filter(z => z.type === type && !z.isBroken);
+  if (filtered.length === 0) return null;
+
+  return filtered.reduce((nearest, zone) => {
+    const distNearest = Math.abs(price - nearest.midpoint);
+    const distZone    = Math.abs(price - zone.midpoint);
+    return distZone < distNearest ? zone : nearest;
+  });
+}

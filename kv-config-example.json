@@ -1,0 +1,14 @@
+{
+  "key": "app_config",
+  "value": {
+    "provider": "mock",
+    "accountSize": 10000,
+    "maxLossPerTrade": 100,
+    "maxOpenRecommendations": 3,
+    "maxTotalOpenRisk": 300,
+    "minRewardRisk": 3.0,
+    "minConfidenceScore": 75,
+    "enabledPairs": ["EUR/USD", "GBP/USD", "GBP/CAD", "USD/JPY", "EUR/GBP", "AUD/USD"],
+    "sessionTimezone": "Europe/London"
+  }
+}
