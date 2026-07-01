@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trading Assistant — Chart</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Left sidebar -->
+    <aside id="sidebar">
+      <div id="pair-selector">
+        <div class="section-label">PAIR</div>
+        <div id="pair-buttons">
+          <button class="pair-btn active" data-pair="EUR/USD">EUR/USD</button>
+          <button class="pair-btn" data-pair="GBP/USD">GBP/USD</button>
+          <button class="pair-btn" data-pair="GBP/CAD">GBP/CAD</button>
+          <button class="pair-btn" data-pair="USD/JPY">USD/JPY</button>
+          <button class="pair-btn" data-pair="EUR/GBP">EUR/GBP</button>
+          <button class="pair-btn" data-pair="AUD/USD">AUD/USD</button>
+        </div>
+      </div>
+
+      <div id="timeframe-selector">
+        <div class="section-label">TIMEFRAME</div>
+        <div id="tf-buttons">
+          <button class="tf-btn active" data-tf="1H">1H</button>
+          <button class="tf-btn" data-tf="4H">4H</button>
+          <button class="tf-btn" data-tf="D">D</button>
+          <button class="tf-btn" data-tf="W">W</button>
+        </div>
+      </div>
+
+      <div id="analysis-panel">
+        <div class="section-label">ANALYSIS</div>
+        <div class="analysis-row">
+          <span class="label">Trend</span>
+          <span id="an-trend" class="value">—</span>
+        </div>
+        <div class="analysis-row">
+          <span class="label">Resistance</span>
+          <span id="an-resistance" class="value">—</span>
+        </div>
+        <div class="analysis-row">
+          <span class="label">Support</span>
+          <span id="an-support" class="value">—</span>
+        </div>
+        <div class="analysis-row">
+          <span class="label">Last Signal</span>
+          <span id="an-signal" class="value">—</span>
+        </div>
+        <div class="analysis-row">
+          <span class="label">Buy Score</span>
+          <span id="an-buy" class="value buy">—</span>
+        </div>
+        <div class="analysis-row">
+          <span class="label">Sell Score</span>
+          <span id="an-sell" class="value sell">—</span>
+        </div>
+        <div id="analysis-loading" class="loading hidden">Loading…</div>
+      </div>
+
+      <div id="trade-panel">
+        <div class="section-label">TRADE IDEA</div>
+        <div class="analysis-row">
+          <span class="label">Direction</span>
+          <span id="tp-direction" class="value">—</span>
+        </div>
+        <div class="analysis-row">
+          <span class="label">Entry</span>
+          <span id="tp-entry" class="value">—</span>
+        </div>
+        <div class="analysis-row">
+          <span class="label">Stop Loss</span>
+          <span id="tp-sl" class="value sell">—</span>
+        </div>
+        <div class="analysis-row">
+          <span class="label">Take Profit</span>
+          <span id="tp-tp" class="value buy">—</span>
+        </div>
+        <div class="analysis-row">
+          <span class="label">Stop (pips)</span>
+          <span id="tp-stop-pips" class="value">—</span>
+        </div>
+        <div class="analysis-row">
+          <span class="label">R:R</span>
+          <span id="tp-rr" class="value">—</span>
+        </div>
+        <div class="analysis-row">
+          <span class="label">Risk</span>
+          <span id="tp-risk" class="value">£100</span>
+        </div>
+        <div class="analysis-row">
+          <span class="label">Reward</span>
+          <span id="tp-reward" class="value buy">—</span>
+        </div>
+        <button id="save-trade-btn">Save Trade Idea</button>
+        <div id="save-status" class="hidden"></div>
+      </div>
+    </aside>
+
+    <!-- Chart area -->
+    <main id="chart-wrapper">
+      <div id="chart-container"></div>
+      <div id="chart-loading" class="chart-overlay hidden">
+        <div class="spinner"></div>
+        <span>Loading candles…</span>
+      </div>
+      <div id="chart-error" class="chart-overlay hidden">
+        <span id="chart-error-msg"></span>
+      </div>
+    </main>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

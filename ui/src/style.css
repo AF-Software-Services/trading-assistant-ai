@@ -1,0 +1,226 @@
+:root {
+  --bg: #0d1117;
+  --panel-bg: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #7d8590;
+  --buy: #3fb950;
+  --sell: #f85149;
+  --entry: #e6edf3;
+  --sl: #f85149;
+  --tp: #3fb950;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+}
+
+#app {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────────────────────── */
+#sidebar {
+  width: 280px;
+  min-width: 280px;
+  background: var(--panel-bg);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+#sidebar > div {
+  border-bottom: 1px solid var(--border);
+  padding: 12px 14px;
+}
+
+.section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 10px;
+  text-transform: uppercase;
+}
+
+/* Pair buttons */
+#pair-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.pair-btn {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 4px;
+  padding: 7px 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.15s;
+  text-align: center;
+}
+
+.pair-btn:hover {
+  border-color: #58a6ff;
+  color: var(--text);
+}
+
+.pair-btn.active {
+  background: #1f6feb;
+  border-color: #58a6ff;
+  color: #fff;
+}
+
+/* Timeframe buttons */
+#tf-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.tf-btn {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 4px;
+  padding: 6px 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all 0.15s;
+  text-align: center;
+}
+
+.tf-btn:hover {
+  border-color: #58a6ff;
+  color: var(--text);
+}
+
+.tf-btn.active {
+  background: #1f6feb;
+  border-color: #58a6ff;
+  color: #fff;
+}
+
+/* Analysis & trade rows */
+.analysis-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 0;
+  border-bottom: 1px solid #21262d;
+  gap: 8px;
+}
+
+.analysis-row:last-of-type {
+  border-bottom: none;
+}
+
+.label {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.value {
+  color: var(--text);
+  font-weight: 500;
+  text-align: right;
+  word-break: break-all;
+}
+
+.value.buy  { color: var(--buy); }
+.value.sell { color: var(--sell); }
+
+.loading {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  padding: 4px 0;
+}
+
+/* Save button */
+#save-trade-btn {
+  margin-top: 12px;
+  width: 100%;
+  padding: 9px;
+  background: #1f6feb;
+  border: 1px solid #58a6ff;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+#save-trade-btn:hover {
+  background: #388bfd;
+}
+
+#save-status {
+  margin-top: 8px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--buy);
+}
+
+/* ── Chart area ──────────────────────────────────────────────────────────── */
+#chart-wrapper {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+#chart-container {
+  width: 100%;
+  height: 100%;
+}
+
+.chart-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(13, 17, 23, 0.75);
+  gap: 12px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--border);
+  border-top-color: #58a6ff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Utility */
+.hidden {
+  display: none !important;
+}

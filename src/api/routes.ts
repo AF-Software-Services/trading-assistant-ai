@@ -27,6 +27,7 @@ interface Env {
   KV: KVNamespace;
   ENVIRONMENT: string;
   MARKET_DATA_PROVIDER: string;
+  TWELVE_DATA_API_KEY: string;
 }
 
 function generateUUID(): string {
@@ -240,6 +241,141 @@ export function createApiRouter(): Hono<{ Bindings: Env }> {
       durationMs: Date.now() - start,
       recommendations: recs,
     });
+  });
+
+  // ── GET /api/v1/candles/:pair ────────────────────────────────────────────────
+  // Proxies Twelve Data, caches in KV for 5 minutes.
+  app.get("/candles/:pair", async (c) => {
+    const pair      = decodeURIComponent(c.req.param("pair"));
+    const timeframe = (c.req.query("timeframe") ?? "1H") as string;
+    const count     = parseInt(c.req.query("count") ?? "200", 10);
+
+    // Timeframe mapping
+    const tfMap: Record<string, string> = { "1H": "1h", "4H": "4h", "D": "1day", "W": "1week" };
+    const interval = tfMap[timeframe] ?? "1h";
+
+    const cacheKey = `candles:${pair}:${timeframe}`;
+
+    // Try KV cache first
+    const cached = await c.env.KV.get(cacheKey, "json") as { candles: unknown[] } | null;
+    if (cached) return c.json(cached);
+
+    const apiKey = c.env.TWELVE_DATA_API_KEY;
+    if (!apiKey) {
+      return c.json({ error: "TWELVE_DATA_API_KEY not configured" }, 503);
+    }
+
+    const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(pair)}&interval=${interval}&outputsize=${count}&apikey=${apiKey}&format=JSON`;
+    const resp = await fetch(url);
+    if (!resp.ok) return c.json({ error: `Twelve Data error: ${resp.status}` }, 502);
+
+    const raw = await resp.json() as {
+      status?: string;
+      code?: number;
+      message?: string;
+      values?: Array<{ datetime: string; open: string; high: string; low: string; close: string }>;
+    };
+    if (raw.status === "error" || raw.code) {
+      return c.json({ error: raw.message ?? "Twelve Data error" }, 502);
+    }
+
+    const values = raw.values ?? [];
+    // Twelve Data returns newest first — reverse to oldest-first
+    const candles = values.slice().reverse().map(v => ({
+      timestamp: new Date(v.datetime.includes("T") ? v.datetime : v.datetime + "Z").getTime(),
+      open:  parseFloat(v.open),
+      high:  parseFloat(v.high),
+      low:   parseFloat(v.low),
+      close: parseFloat(v.close),
+    }));
+
+    const result = { pair, timeframe, candles };
+    // Cache for 5 minutes
+    await c.env.KV.put(cacheKey, JSON.stringify(result), { expirationTtl: 300 });
+    return c.json(result);
+  });
+
+  // ── GET /api/v1/analysis/:pair ───────────────────────────────────────────────
+  // Run all engines on 1H data, return trend/zones/signals/scores.
+  app.get("/analysis/:pair", async (c) => {
+    const pair = decodeURIComponent(c.req.param("pair")) as CurrencyPair;
+    if (!PHASE1_PAIRS.includes(pair)) return c.json({ error: "Unknown pair" }, 400);
+
+    const provider  = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER });
+    const candles   = await provider.getCandles(pair, "1H", 200);
+    const atr       = calculateATR(candles);
+    const structure = analyseMarketStructure(candles, "1H");
+    const zones     = detectZones(candles, "1H", atr);
+    const trend     = analyseTrend(candles, structure);
+    const signals   = detectAllSignals(candles, zones);
+
+    // Derive buy/sell scores: buy = alignment with uptrend, sell = downtrend
+    const trendBias = trend.bias;
+    const recentSigs = signals.slice(-10);
+    const bullishTypes = new Set(["bullish_engulfing", "hammer"]);
+    const bullishCount = recentSigs.filter(s => bullishTypes.has(s.type)).length;
+    const bearishCount = recentSigs.filter(s => !bullishTypes.has(s.type)).length;
+
+    let buyScore  = trendBias === "uptrend"   ? 60 : trendBias === "range" ? 40 : 20;
+    let sellScore = trendBias === "downtrend" ? 60 : trendBias === "range" ? 40 : 20;
+    buyScore  = Math.min(100, buyScore  + bullishCount * 8);
+    sellScore = Math.min(100, sellScore + bearishCount * 8);
+
+    return c.json({
+      pair,
+      trend: trendBias,
+      zones,
+      structure,
+      signals: signals.slice(-10),
+      buyScore,
+      sellScore,
+    });
+  });
+
+  // ── POST /api/v1/trade-ideas ─────────────────────────────────────────────────
+  app.post("/trade-ideas", async (c) => {
+    const body = await c.req.json<{
+      pair: string;
+      direction: string;
+      entry: number;
+      stopLoss: number;
+      takeProfit: number;
+      riskReward: number;
+      riskAmount: number;
+      rewardAmount: number;
+      notes?: string;
+    }>().catch(() => null);
+
+    if (!body || !body.pair || !body.direction) {
+      return c.json({ error: "Invalid body" }, 400);
+    }
+
+    const id        = generateUUID();
+    const createdAt = Date.now();
+
+    await c.env.DB.prepare(
+      `INSERT INTO trade_journal (id, pair, direction, entry, stop_loss, take_profit, risk_reward, risk_amount, reward_amount, notes, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      id,
+      body.pair,
+      body.direction,
+      body.entry,
+      body.stopLoss,
+      body.takeProfit,
+      body.riskReward,
+      body.riskAmount,
+      body.rewardAmount,
+      body.notes ?? null,
+      createdAt,
+    ).run();
+
+    return c.json({ id, createdAt }, 201);
+  });
+
+  // ── GET /chart → redirect to index (assets fallback) ────────────────────────
+  app.get("/chart", (c) => {
+    return c.redirect("/");
   });
 
   return app;

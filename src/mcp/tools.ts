@@ -297,7 +297,50 @@ export function registerTools(server: McpServer, env: Env): void {
     }
   );
 
-  // ── 14. run_scheduled_scan ───────────────────────────────────────────────────
+  // ── 14. open_chart ───────────────────────────────────────────────────────────
+  server.tool(
+    "open_chart",
+    "Return a URL to open the trading chart UI for a specific pair and timeframe, along with a brief analysis summary.",
+    {
+      pair:      z.enum(["EUR/USD", "GBP/USD", "GBP/CAD", "USD/JPY", "EUR/GBP", "AUD/USD"]).optional().default("EUR/USD"),
+      timeframe: z.enum(["1H", "4H", "D", "W"]).optional().default("1H"),
+    },
+    async ({ pair, timeframe }) => {
+      const p  = (pair      ?? "EUR/USD") as CurrencyPair;
+      const tf = (timeframe ?? "1H")      as Timeframe;
+
+      const encodedPair = encodeURIComponent(p);
+      const chartUrl = `https://trading-assistant-ai.andrew-dobson.workers.dev/?pair=${encodedPair}&timeframe=${tf}`;
+
+      // Run quick analysis
+      const candles   = await provider.getCandles(p, "1H", 200);
+      const atr       = calculateATR(candles);
+      const structure = analyseMarketStructure(candles, tf);
+      const zones     = detectZones(candles, tf, atr);
+      const trend     = analyseTrend(candles, structure);
+      const signals   = detectAllSignals(candles, zones);
+      const lastSig   = signals[signals.length - 1];
+
+      const trendLabel = trend.bias === "uptrend"   ? "▲ UPTREND"
+                       : trend.bias === "downtrend" ? "▼ DOWNTREND"
+                       :                              "◆ RANGE";
+
+      const lines = [
+        `Chart URL: ${chartUrl}`,
+        ``,
+        `=== ${p} — ${tf} Analysis ===`,
+        `Trend:    ${trendLabel}`,
+        `Zones:    ${zones.length} active (${zones.filter(z => z.type === "resistance").length} resistance, ${zones.filter(z => z.type === "support").length} support)`,
+        lastSig ? `Last Signal: ${lastSig.type} ${lastSig.direction} (confidence: ${lastSig.confidence}%)` : `Last Signal: None detected`,
+        ``,
+        `Open the chart link above to view candlesticks, S/R zones, and set up a trade idea.`,
+      ];
+
+      return text(lines.join("\n"));
+    }
+  );
+
+  // ── 15. run_scheduled_scan ───────────────────────────────────────────────────
   server.tool(
     "run_scheduled_scan",
     "Trigger a full scan of all currency pairs, generate recommendations, and persist results.",

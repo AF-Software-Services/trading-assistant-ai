@@ -8,6 +8,7 @@ export interface Env {
   KV: KVNamespace;
   ENVIRONMENT: string;
   MARKET_DATA_PROVIDER: string;
+  TWELVE_DATA_API_KEY: string;
 }
 
 const app = new Hono<{ Bindings: Env }>();
