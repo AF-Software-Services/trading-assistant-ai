@@ -220,6 +220,29 @@ html, body {
   to { transform: rotate(360deg); }
 }
 
+.toggle-btn {
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.toggle-btn:not(.active) {
+  background: transparent;
+  color: var(--muted);
+}
+
+.risk-note {
+  margin-top: 8px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+
 /* Utility */
 .hidden {
   display: none !important;

@@ -146,6 +146,7 @@ async function loadAnalysis(candles?: Awaited<ReturnType<typeof getCandles>>): P
     // Use the candles already fetched (passed in) or fetch fresh if called standalone
     const candleData = candles ?? await getCandles(activePair, activeTimeframe, 200)
     chart.applySignals(data.signals, candleData)
+    chart.applyPatterns(data.patterns ?? [])
   } catch (err) {
     // Analysis endpoint failing shouldn't break the chart — just clear panel
     el('an-trend').textContent      = 'Error'
@@ -191,6 +192,14 @@ function init(): void {
   initPairButtons()
   initTfButtons()
   applyUrlParams()
+
+  // Structure toggle
+  el('structure-toggle').addEventListener('click', () => {
+    const btn = el<HTMLButtonElement>('structure-toggle')
+    const active = btn.classList.toggle('active')
+    btn.textContent = active ? 'ON' : 'OFF'
+    chart.toggleStructure(active)
+  })
 
   // Update pair/TF on chart after URL params applied
   chart.setPair(activePair)

@@ -57,6 +57,17 @@ export interface ChartPattern {
   target?: number;
   confidence: number;
   detectedAt: number;
+  extendedData?: {
+    leftShoulderTimestamp: number;
+    leftShoulderPrice: number;
+    headTimestamp: number;
+    headPrice: number;
+    rightShoulderTimestamp: number;
+    rightShoulderPrice: number;
+    necklineLeft: number;
+    necklineRight: number;
+    necklinePrice: number;
+  };
 }
 
 export interface TrendAnalysis {

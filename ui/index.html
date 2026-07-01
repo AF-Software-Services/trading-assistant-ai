@@ -32,6 +32,10 @@
         </div>
       </div>
 
+      <div id="structure-section">
+        <div class="section-label">STRUCTURE <button id="structure-toggle" class="toggle-btn active" title="Toggle HH/HL/LH/LL labels">ON</button></div>
+      </div>
+
       <div id="analysis-panel">
         <div class="section-label">ANALYSIS</div>
         <div class="analysis-row">
@@ -89,13 +93,18 @@
         </div>
         <div class="analysis-row">
           <span class="label">Risk</span>
-          <span id="tp-risk" class="value">£100</span>
+          <span id="tp-risk" class="value">£100.00 (max)</span>
         </div>
         <div class="analysis-row">
           <span class="label">Reward</span>
           <span id="tp-reward" class="value buy">—</span>
         </div>
+        <div class="analysis-row">
+          <span class="label">Lot Size</span>
+          <span class="value" id="tp-lots">—</span>
+        </div>
         <button id="save-trade-btn">Save Trade Idea</button>
+        <div class="risk-note">Risk is fixed at £100 per trade</div>
         <div id="save-status" class="hidden"></div>
       </div>
     </aside>

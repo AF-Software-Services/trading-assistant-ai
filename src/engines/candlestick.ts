@@ -86,6 +86,11 @@ export function detectBullishEngulfing(
     const openBelow   = curr.open  <= prev.close;
     const closeAbove  = curr.close >= prev.open;
 
+    // Minimum body size: current body must be > 30% of candle range to filter doji noise
+    const currRange = curr.high - curr.low;
+    const currBody  = Math.abs(curr.close - curr.open);
+    if (currRange === 0 || currBody / currRange < 0.3) continue;
+
     if (prevBearish && currBullish && openBelow && closeAbove) {
       signals.push({
         pair: curr.pair,
@@ -124,6 +129,11 @@ export function detectBearishEngulfing(
     const currBearish  = curr.close < curr.open;
     const openAbove    = curr.open  >= prev.close;
     const closeBelow   = curr.close <= prev.open;
+
+    // Minimum body size: current body must be > 30% of candle range to filter doji noise
+    const currRange = curr.high - curr.low;
+    const currBody  = Math.abs(curr.close - curr.open);
+    if (currRange === 0 || currBody / currRange < 0.3) continue;
 
     if (prevBullish && currBearish && openAbove && closeBelow) {
       signals.push({

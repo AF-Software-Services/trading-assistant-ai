@@ -54,7 +54,7 @@ export function createApiRouter(): Hono<{ Bindings: Env }> {
     }
     const body = await c.req.json<{ timeframe?: Timeframe }>().catch(() => ({}));
     const tf: Timeframe = body.timeframe ?? "4H";
-    const provider  = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER });
+    const provider  = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER, apiKey: c.env.TWELVE_DATA_API_KEY || undefined });
     const candles   = await provider.getCandles(pair, tf, 200);
     const atr       = calculateATR(candles);
     const structure = analyseMarketStructure(candles, tf);
@@ -67,7 +67,7 @@ export function createApiRouter(): Hono<{ Bindings: Env }> {
 
   // POST /api/v1/analyse  (all pairs)
   app.post("/analyse", async (c) => {
-    const provider = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER });
+    const provider = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER, apiKey: c.env.TWELVE_DATA_API_KEY || undefined });
     const recs = await generateAllRecommendations(PHASE1_PAIRS, provider);
     return c.json({ recommendations: recs, count: recs.length, generatedAt: Date.now() });
   });
@@ -77,7 +77,7 @@ export function createApiRouter(): Hono<{ Bindings: Env }> {
     const pair = c.req.param("pair") as CurrencyPair;
     if (!PHASE1_PAIRS.includes(pair)) return c.json({ error: "Unknown pair" }, 400);
     const tf: Timeframe = (c.req.query("timeframe") as Timeframe | undefined) ?? "4H";
-    const provider  = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER });
+    const provider  = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER, apiKey: c.env.TWELVE_DATA_API_KEY || undefined });
     const candles   = await provider.getCandles(pair, tf, 200);
     const structure = analyseMarketStructure(candles, tf);
     return c.json(structure);
@@ -88,7 +88,7 @@ export function createApiRouter(): Hono<{ Bindings: Env }> {
     const pair = c.req.param("pair") as CurrencyPair;
     if (!PHASE1_PAIRS.includes(pair)) return c.json({ error: "Unknown pair" }, 400);
     const tf: Timeframe = (c.req.query("timeframe") as Timeframe | undefined) ?? "D";
-    const provider = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER });
+    const provider = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER, apiKey: c.env.TWELVE_DATA_API_KEY || undefined });
     const candles  = await provider.getCandles(pair, tf, 200);
     const atr      = calculateATR(candles);
     const zones    = detectZones(candles, tf, atr);
@@ -100,7 +100,7 @@ export function createApiRouter(): Hono<{ Bindings: Env }> {
     const pair = c.req.param("pair") as CurrencyPair;
     if (!PHASE1_PAIRS.includes(pair)) return c.json({ error: "Unknown pair" }, 400);
     const tf: Timeframe = (c.req.query("timeframe") as Timeframe | undefined) ?? "4H";
-    const provider = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER });
+    const provider = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER, apiKey: c.env.TWELVE_DATA_API_KEY || undefined });
     const candles  = await provider.getCandles(pair, tf, 100);
     const atr      = calculateATR(candles);
     const zones    = detectZones(candles, tf, atr);
@@ -112,7 +112,7 @@ export function createApiRouter(): Hono<{ Bindings: Env }> {
   app.get("/patterns/:pair", async (c) => {
     const pair = c.req.param("pair") as CurrencyPair;
     if (!PHASE1_PAIRS.includes(pair)) return c.json({ error: "Unknown pair" }, 400);
-    const provider = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER });
+    const provider = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER, apiKey: c.env.TWELVE_DATA_API_KEY || undefined });
     const candles  = await provider.getCandles(pair, "D", 100);
     const patterns = detectAllPatterns(candles);
     return c.json({ pair, patterns, note: "Pattern detection planned for v2." });
@@ -162,7 +162,7 @@ export function createApiRouter(): Hono<{ Bindings: Env }> {
   app.post("/recommendations/:id/review", async (c) => {
     const rec = await getRecommendation(c.env.DB, c.req.param("id"));
     if (!rec) return c.json({ error: "Not found" }, 404);
-    const provider   = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER });
+    const provider   = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER, apiKey: c.env.TWELVE_DATA_API_KEY || undefined });
     const suggestion = await reviewRecommendation(rec, provider);
     return c.json({ recommendation: rec, suggestion });
   });
@@ -205,7 +205,7 @@ export function createApiRouter(): Hono<{ Bindings: Env }> {
   // POST /api/v1/scan
   app.post("/scan", async (c) => {
     const start    = Date.now();
-    const provider = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER });
+    const provider = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER, apiKey: c.env.TWELVE_DATA_API_KEY || undefined });
     const recs     = await generateAllRecommendations(PHASE1_PAIRS, provider);
 
     for (const rec of recs) {
@@ -301,13 +301,15 @@ export function createApiRouter(): Hono<{ Bindings: Env }> {
     const pair = decodeURIComponent(c.req.param("pair")) as CurrencyPair;
     if (!PHASE1_PAIRS.includes(pair)) return c.json({ error: "Unknown pair" }, 400);
 
-    const provider  = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER });
+    const provider  = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER, apiKey: c.env.TWELVE_DATA_API_KEY || undefined });
     const candles   = await provider.getCandles(pair, "1H", 200);
     const atr       = calculateATR(candles);
     const structure = analyseMarketStructure(candles, "1H");
     const zones     = detectZones(candles, "1H", atr);
     const trend     = analyseTrend(candles, structure);
     const signals   = detectAllSignals(candles, zones);
+    const candles4H = await provider.getCandles(pair, "4H", 200);
+    const patterns  = detectAllPatterns(candles4H);
 
     // Derive buy/sell scores: buy = alignment with uptrend, sell = downtrend
     const trendBias = trend.bias;
@@ -329,6 +331,7 @@ export function createApiRouter(): Hono<{ Bindings: Env }> {
       signals: signals.slice(-10),
       buyScore,
       sellScore,
+      patterns,
     });
   });
 

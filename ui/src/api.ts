@@ -40,6 +40,22 @@ export interface AnalysisResult {
   signals: Signal[]
   buyScore: number
   sellScore: number
+  patterns?: Array<{
+    type: string
+    status: string
+    neckline?: number
+    target?: number
+    confidence: number
+    extendedData?: {
+      leftShoulderTimestamp: number
+      leftShoulderPrice: number
+      headTimestamp: number
+      headPrice: number
+      rightShoulderTimestamp: number
+      rightShoulderPrice: number
+      necklinePrice: number
+    }
+  }>
 }
 
 export interface TradeIdea {

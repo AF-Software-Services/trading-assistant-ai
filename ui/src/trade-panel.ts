@@ -49,8 +49,12 @@ export class TradePanel {
     el('tp-tp').textContent    = tp.toFixed(dec)
     el('tp-stop-pips').textContent = stopPips.toFixed(1)
     el('tp-rr').textContent    = rr.toFixed(2)
-    el('tp-risk').textContent  = `£${risk.toFixed(2)}`
+    el('tp-risk').textContent  = `£${risk.toFixed(2)} (max)`
     el('tp-reward').textContent = `£${reward.toFixed(2)}`
+
+    const pipValue = this.pair.includes('JPY') ? 0.067 : 1.0  // per mini lot per pip
+    const lots = stopPips > 0 ? (risk / (stopPips * pipValue)) / 10 : 0  // convert mini to standard
+    el('tp-lots').textContent = lots > 0 ? `${lots.toFixed(2)} lots` : '—'
   }
 
   private async saveTrade(): Promise<void> {

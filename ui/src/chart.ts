@@ -1,11 +1,12 @@
 import { init, registerOverlay } from 'klinecharts'
 import type { Chart } from 'klinecharts'
-import type { CandleData, Zone, Signal, SwingPoint } from './api'
+import type { CandleData, Zone, Signal, SwingPoint, AnalysisResult } from './api'
 import {
   srZoneOverlay,
   hLineOverlay,
   swingLabelOverlay,
   signalMarkerOverlay,
+  hnsOverlay,
 } from './overlay'
 
 // Register custom overlays once
@@ -13,6 +14,7 @@ registerOverlay(srZoneOverlay)
 registerOverlay(hLineOverlay)
 registerOverlay(swingLabelOverlay)
 registerOverlay(signalMarkerOverlay)
+registerOverlay(hnsOverlay)
 
 export interface TradeLinesState {
   entry: number
@@ -41,6 +43,14 @@ export class TradingChart {
   private zoneIds: string[] = []
   // Annotation overlay IDs
   private annotationIds: string[] = []
+  // Swing label overlay IDs (subset of annotationIds, tracked separately for toggle)
+  private swingIds: string[] = []
+  // Pattern overlay IDs
+  private patternIds: string[] = []
+  // Structure toggle state
+  private showStructure = true
+  // Last received swing points (for re-render on toggle)
+  private lastStructure: SwingPoint[] = []
 
   private onTradeLinesChange: TradeLinesChangeCallback | null = null
 
@@ -197,15 +207,15 @@ export class TradingChart {
         : zone.timeframe === 'D' ? 'D'
         : 'I'
 
+      // Two points give KLineChart two y-coordinates we use for the zone rectangle
+      const midTimestamp = this.data[Math.floor(this.data.length / 2)]?.timestamp ?? Date.now()
       const result = this.chart.createOverlay({
         name: 'srZone',
-        points: [{ value: zone.low }],
-        extendData: {
-          priceLow:  zone.low,
-          priceHigh: zone.high,
-          color,
-          label: tfLabel,
-        },
+        points: [
+          { timestamp: midTimestamp, value: zone.low },
+          { timestamp: midTimestamp, value: zone.high },
+        ],
+        extendData: { color, label: tfLabel },
         lock: true,
       })
       if (typeof result === 'string') this.zoneIds.push(result)
@@ -213,11 +223,16 @@ export class TradingChart {
   }
 
   applySwingPoints(swingPoints: SwingPoint[]): void {
-    // Remove old annotation overlays
-    for (const id of this.annotationIds) {
+    // Store for re-render on toggle
+    this.lastStructure = swingPoints
+
+    // Remove old swing label overlays
+    for (const id of this.swingIds) {
       this.chart.removeOverlay({ id })
     }
-    this.annotationIds = []
+    this.swingIds = []
+
+    if (!this.showStructure) return
 
     for (const sp of swingPoints) {
       const above = sp.label === 'HH' || sp.label === 'LH'
@@ -227,7 +242,57 @@ export class TradingChart {
         extendData: { label: sp.label, above },
         lock: true,
       })
-      if (typeof result === 'string') this.annotationIds.push(result)
+      if (typeof result === 'string') {
+        this.swingIds.push(result)
+        this.annotationIds.push(result)
+      }
+    }
+  }
+
+  toggleStructure(show: boolean): void {
+    this.showStructure = show
+    if (!show) {
+      for (const id of this.swingIds) {
+        this.chart.removeOverlay({ id })
+      }
+      this.swingIds = []
+    } else {
+      this.applySwingPoints(this.lastStructure)
+    }
+  }
+
+  applyPatterns(patterns: AnalysisResult['patterns']): void {
+    // Remove old pattern overlays
+    for (const id of this.patternIds) {
+      this.chart.removeOverlay({ id })
+    }
+    this.patternIds = []
+
+    if (!patterns) return
+
+    for (const p of patterns) {
+      if (!p.extendedData) continue
+      const ed = p.extendedData
+      const isInverse = p.type === 'inverse_head_and_shoulders'
+      const label = isInverse ? 'IH&S' : 'H&S'
+      const color = p.status === 'confirmed' ? '#f85149' : '#e3b341'
+
+      const result = this.chart.createOverlay({
+        name: 'hns',
+        points: [
+          { timestamp: ed.leftShoulderTimestamp, value: ed.leftShoulderPrice },
+          { timestamp: ed.headTimestamp, value: ed.headPrice },
+          { timestamp: ed.rightShoulderTimestamp, value: ed.rightShoulderPrice },
+        ],
+        extendData: {
+          label,
+          color,
+          confidence: p.confidence,
+          necklinePrice: ed.necklinePrice,
+        },
+        lock: true,
+      })
+      if (typeof result === 'string') this.patternIds.push(result)
     }
   }
 
@@ -276,8 +341,8 @@ export class TradingChart {
 
     const factor = pipFactor(this.pair)
     const entry  = this.currentPrice
-    const sl     = entry - (20 / factor)
-    const tp     = entry + (60 / factor)
+    const sl     = entry - (15 / factor)
+    const tp     = entry + (45 / factor)
 
     const onChange = () => {
       this.onTradeLinesChange?.(this.getTradeLinesState())
