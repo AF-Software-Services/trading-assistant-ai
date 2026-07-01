@@ -3,7 +3,7 @@ import type { Chart } from 'klinecharts'
 import type { CandleData, Zone, Signal, SwingPoint, AnalysisResult } from './api'
 import {
   srZoneOverlay,
-  hLineOverlay,
+  tradeZoneOverlay,
   swingLabelOverlay,
   signalMarkerOverlay,
   hnsOverlay,
@@ -11,7 +11,7 @@ import {
 
 // Register custom overlays once
 registerOverlay(srZoneOverlay)
-registerOverlay(hLineOverlay)
+registerOverlay(tradeZoneOverlay)
 registerOverlay(swingLabelOverlay)
 registerOverlay(signalMarkerOverlay)
 registerOverlay(hnsOverlay)
@@ -35,10 +35,8 @@ export class TradingChart {
   private currentPrice: number = 0
   private data: CandleData[] = []
 
-  // Overlay IDs for draggable lines
-  private entryId: string | null = null
-  private slId: string | null = null
-  private tpId: string | null = null
+  // Single trade zone overlay (entry + SL + TP)
+  private tradeZoneId: string | null = null
 
   // Zone overlay IDs
   private zoneIds: string[] = []
@@ -373,61 +371,58 @@ export class TradingChart {
   // ── Trade lines ───────────────────────────────────────────────────────────────
 
   getTradeLinesState(): TradeLinesState {
-    const getPrice = (id: string | null): number => {
-      if (!id) return 0
-      const overlays = this.chart.getOverlayById(id)
-      const overlay  = Array.isArray(overlays) ? overlays[0] : overlays
-      return overlay?.points[0]?.value ?? 0
-    }
+    if (!this.tradeZoneId) return { entry: 0, sl: 0, tp: 0 }
+    const overlays = this.chart.getOverlayById(this.tradeZoneId)
+    const overlay  = Array.isArray(overlays) ? overlays[0] : overlays
     return {
-      entry: getPrice(this.entryId),
-      sl:    getPrice(this.slId),
-      tp:    getPrice(this.tpId),
+      entry: overlay?.points[0]?.value ?? 0,
+      sl:    overlay?.points[1]?.value ?? 0,
+      tp:    overlay?.points[2]?.value ?? 0,
     }
   }
 
   private resetTradeLines(): void {
-    if (this.entryId) this.chart.removeOverlay({ id: this.entryId })
-    if (this.slId)    this.chart.removeOverlay({ id: this.slId })
-    if (this.tpId)    this.chart.removeOverlay({ id: this.tpId })
+    if (this.tradeZoneId) this.chart.removeOverlay({ id: this.tradeZoneId })
 
-    const factor   = pipFactor(this.pair)
-    const entry    = this.currentPrice
-    const stopPips = this.suggestedStopPips > 0 ? this.suggestedStopPips : 30
-    const d        = this.direction  // 1 = long, -1 = short
-    const sl = entry - d * (stopPips / factor)
-    const tp = entry + d * ((stopPips * 5) / factor)
+    const factor     = pipFactor(this.pair)
+    const dec        = this.pair.includes('JPY') ? 3 : 5
+    const entry      = this.currentPrice
+    const stopPips   = this.suggestedStopPips > 0 ? this.suggestedStopPips : 30
+    const d          = this.direction
+    const sl         = entry - d * (stopPips / factor)
+    const tp         = entry + d * (stopPips * 5 / factor)
+    const rewardPips = stopPips * 5
+    const rr         = 5
 
     const onChange = () => {
-      this.onTradeLinesChange?.(this.getTradeLinesState())
+      const state = this.getTradeLinesState()
+      // Recompute extendData from current dragged values so zone labels stay accurate
+      const currentFactor   = pipFactor(this.pair)
+      const currentStop     = Math.abs(state.entry - state.sl) * currentFactor
+      const currentReward   = Math.abs(state.tp    - state.entry) * currentFactor
+      const currentRR       = currentStop > 0 ? currentReward / currentStop : 0
+      this.chart.overrideOverlay({
+        id: this.tradeZoneId!,
+        extendData: {
+          dec,
+          stopPips:   +currentStop.toFixed(1),
+          rewardPips: +currentReward.toFixed(1),
+          reward:     +(currentStop > 0 ? 100 * currentRR : 0).toFixed(0),
+          rr:         +currentRR.toFixed(1),
+        },
+      })
+      this.onTradeLinesChange?.(state)
     }
 
-    const entryResult = this.chart.createOverlay({
-      name: 'hLine',
-      points: [{ value: entry }],
-      extendData: { color: '#e6edf3', label: 'ENTRY' },
-      lock: false,
-      onPressedMoveEnd: onChange,
-    })
-    const slResult = this.chart.createOverlay({
-      name: 'hLine',
-      points: [{ value: sl }],
-      extendData: { color: '#f85149', label: 'SL' },
-      lock: false,
-      onPressedMoveEnd: onChange,
-    })
-    const tpResult = this.chart.createOverlay({
-      name: 'hLine',
-      points: [{ value: tp }],
-      extendData: { color: '#3fb950', label: 'TP' },
+    const result = this.chart.createOverlay({
+      name: 'tradeZone',
+      points: [{ value: entry }, { value: sl }, { value: tp }],
+      extendData: { dec, stopPips, rewardPips, reward: +(stopPips > 0 ? 100 * rr : 0), rr },
       lock: false,
       onPressedMoveEnd: onChange,
     })
 
-    this.entryId = typeof entryResult === 'string' ? entryResult : null
-    this.slId    = typeof slResult    === 'string' ? slResult    : null
-    this.tpId    = typeof tpResult    === 'string' ? tpResult    : null
-
+    this.tradeZoneId = typeof result === 'string' ? result : null
     setTimeout(onChange, 100)
   }
 
