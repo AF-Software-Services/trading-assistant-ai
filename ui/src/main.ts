@@ -333,15 +333,19 @@ function initDrawingTools(): void {
   }
 
   document.getElementById('draw-support')?.addEventListener('click', () => {
-    setDrawMode(true)
+    chart.startDrawSR('support')
     document.getElementById('draw-support')!.classList.add('active')
-    chart.startDrawSR('support', () => setDrawMode(false))
+    hint.textContent = 'Support line placed — drag to reposition'
+    hint.classList.remove('hidden')
+    setTimeout(() => { hint.classList.add('hidden'); setDrawMode(false) }, 2000)
   })
 
   document.getElementById('draw-resistance')?.addEventListener('click', () => {
-    setDrawMode(true)
+    chart.startDrawSR('resistance')
     document.getElementById('draw-resistance')!.classList.add('active')
-    chart.startDrawSR('resistance', () => setDrawMode(false))
+    hint.textContent = 'Resistance line placed — drag to reposition'
+    hint.classList.remove('hidden')
+    setTimeout(() => { hint.classList.add('hidden'); setDrawMode(false) }, 2000)
   })
 
   document.getElementById('draw-long')?.addEventListener('click', () => {
@@ -658,17 +662,32 @@ function initRiskSettings(): void {
   dropdown.addEventListener('click', (e) => e.stopPropagation())
 
   let saveTimer: ReturnType<typeof setTimeout> | null = null
+  const syncIndicator = document.createElement('span')
+  syncIndicator.id = 'risk-sync-status'
+  syncIndicator.style.cssText = 'font-size:10px;margin-left:auto;color:var(--muted);display:block;text-align:right;padding:4px 0 0;'
+  el('risk-dropdown').appendChild(syncIndicator)
+
+  const setSyncStatus = (state: 'saving' | 'saved' | 'error') => {
+    syncIndicator.textContent = state === 'saving' ? '↻ Syncing…' : state === 'saved' ? '✓ Synced to MCP' : '⚠ Sync failed'
+    syncIndicator.style.color = state === 'error' ? 'var(--sell)' : state === 'saved' ? 'var(--buy)' : 'var(--muted)'
+  }
 
   const saveToKv = () => {
-    // Debounce — only send after user stops typing for 1s
     if (saveTimer) clearTimeout(saveTimer)
-    saveTimer = setTimeout(() => {
-      fetch('/api/v1/settings/risk', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountBalance, riskPercent, rewardRisk }),
-      }).catch(() => {/* silently ignore — localStorage is the source of truth locally */})
-    }, 1000)
+    setSyncStatus('saving')
+    saveTimer = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/v1/settings/risk', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accountBalance, riskPercent, rewardRisk }),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        setSyncStatus('saved')
+      } catch {
+        setSyncStatus('error')
+      }
+    }, 500)
   }
 
   const onChange = () => {

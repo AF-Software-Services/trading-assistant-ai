@@ -546,21 +546,26 @@ export class TradingChart {
 
   // ── User drawing tools ────────────────────────────────────────────────────────
 
-  startDrawSR(type: 'support' | 'resistance', onPlaced?: (id: string) => void): void {
+  startDrawSR(type: 'support' | 'resistance'): string | null {
     const color = type === 'support' ? '#3fb950' : '#f85149'
     const label = type === 'support' ? 'Support' : 'Resistance'
-    this.chart.startDraw({
+
+    // Place line immediately at current price — user drags it to the exact level.
+    // This is more reliable than startDraw() which only works with built-in overlay types.
+    const price  = this.currentPrice || (this.data[Math.floor(this.data.length * 0.5)]?.close ?? 0)
+    const dragTs = this.data[Math.floor(this.data.length * 0.75)]?.timestamp ?? Date.now()
+
+    const result = this.chart.createOverlay({
       name: 'hLine',
+      points: [{ timestamp: dragTs, value: price }],
       extendData: { color, label, info: 'drag to adjust' },
       lock: false,
-      onDrawEnd: (event: unknown) => {
-        const id = (event as { overlay?: { id?: string } })?.overlay?.id
-        if (id) {
-          this.userDrawingIds.push(id)
-          onPlaced?.(id)
-        }
-      },
-    } as Parameters<Chart['startDraw']>[0])
+    })
+    if (typeof result === 'string') {
+      this.userDrawingIds.push(result)
+      return result
+    }
+    return null
   }
 
   cancelDraw(): void {

@@ -205,6 +205,9 @@ export function registerTools(server: McpServer, env: Env): void {
           maxRiskAmount:  riskAmount ?? null,
           rewardRisk:     rrRatio,
           source: (accountBalance || riskPercent) ? "override" : savedSettings ? "saved" : "default",
+          warning: !resolvedBalance || !resolvedRiskPct
+            ? "⚠️ NO RISK SETTINGS SAVED — position sizing and R:R calculations are using defaults. Tell the user to open the Trading Assistant UI and check their ⚙ Risk settings, or call set_risk_settings to save them now."
+            : null,
         },
       });
     }
