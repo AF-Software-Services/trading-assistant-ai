@@ -80,15 +80,17 @@ export interface TrendAnalysis {
   confidence: number;
 }
 
+export type TradeClass = "PRO_TREND" | "COUNTER_TREND" | "MIXED" | "NO_TRADE";
+
 export interface ScoreBreakdown {
-  srStrength: number;
-  timeframeImportance: number;
-  candlestickSignal: number;
-  marketStructure: number;
-  trendAlignment: number;
-  patternConfirmation: number;
-  rewardRiskPotential: number;
-  total: number;
+  htfAlignment:    number;
+  discountPremium: number;
+  triggerSignal:   number;
+  structureIntact: number;
+  rrQuality:       number;
+  total:           number;
+  tradeClass:      TradeClass;
+  blockers:        string[];
 }
 
 export interface RiskCalculation {
@@ -113,6 +115,8 @@ export interface Recommendation {
   id: string;
   pair: CurrencyPair;
   direction: Direction;
+  tradeClass: TradeClass;
+  mtfLabel: string;
   confidence: number;
   scoreBreakdown: ScoreBreakdown;
   setupType: string;

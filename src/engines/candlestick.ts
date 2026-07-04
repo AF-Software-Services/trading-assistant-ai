@@ -83,13 +83,18 @@ export function detectBullishEngulfing(
 
     const prevBearish = prev.close < prev.open;
     const currBullish = curr.close > curr.open;
-    const openBelow   = curr.open  <= prev.close;
-    const closeAbove  = curr.close >= prev.open;
+    // Strict: current body must OPEN below and CLOSE strictly above the prior body
+    const openBelow  = curr.open  < prev.close;
+    const closeAbove = curr.close > prev.open;
 
-    // Minimum body size: current body must be > 30% of candle range to filter doji noise
-    const currRange = curr.high - curr.low;
+    const prevBody  = Math.abs(prev.close - prev.open);
     const currBody  = Math.abs(curr.close - curr.open);
-    if (currRange === 0 || currBody / currRange < 0.3) continue;
+    const currRange = curr.high - curr.low;
+
+    // Previous candle must have a real body (not a doji), current body must be larger
+    if (prevBody === 0 || currRange === 0) continue;
+    if (currBody / currRange < 0.3) continue;   // current must be a real body
+    if (currBody <= prevBody) continue;           // current must fully engulf previous
 
     if (prevBearish && currBullish && openBelow && closeAbove) {
       signals.push({
@@ -111,8 +116,8 @@ export function detectBullishEngulfing(
  * Conditions:
  * - Previous candle is bullish (close > open)
  * - Current candle is bearish (close < open)
- * - Current open >= previous close
- * - Current close <= previous open
+ * - Current body strictly opens above and closes below the prior bullish body
+ * - Current body must be larger than the prior body
  */
 export function detectBearishEngulfing(
   candles: Candle[],
@@ -125,15 +130,19 @@ export function detectBearishEngulfing(
     const curr = candles[i];
     if (!prev || !curr) continue;
 
-    const prevBullish  = prev.close > prev.open;
-    const currBearish  = curr.close < curr.open;
-    const openAbove    = curr.open  >= prev.close;
-    const closeBelow   = curr.close <= prev.open;
+    const prevBullish = prev.close > prev.open;
+    const currBearish = curr.close < curr.open;
+    // Strict: current body must OPEN strictly above and CLOSE below the prior body
+    const openAbove  = curr.open  > prev.close;
+    const closeBelow = curr.close < prev.open;
 
-    // Minimum body size: current body must be > 30% of candle range to filter doji noise
-    const currRange = curr.high - curr.low;
+    const prevBody  = Math.abs(prev.close - prev.open);
     const currBody  = Math.abs(curr.close - curr.open);
-    if (currRange === 0 || currBody / currRange < 0.3) continue;
+    const currRange = curr.high - curr.low;
+
+    if (prevBody === 0 || currRange === 0) continue;
+    if (currBody / currRange < 0.3) continue;
+    if (currBody <= prevBody) continue;
 
     if (prevBullish && currBearish && openAbove && closeBelow) {
       signals.push({
@@ -151,6 +160,141 @@ export function detectBearishEngulfing(
 }
 
 /**
+ * Shooting Star — bearish reversal single candle.
+ * Small real body near the low, upper wick ≥ 2× body, little/no lower wick.
+ */
+export function detectShootingStar(
+  candles: Candle[],
+  zones: SupportResistanceZone[] = []
+): CandlestickSignal[] {
+  const signals: CandlestickSignal[] = [];
+  for (const c of candles) {
+    const body      = Math.abs(c.close - c.open);
+    const upperWick = c.high - Math.max(c.open, c.close);
+    const lowerWick = Math.min(c.open, c.close) - c.low;
+    const range     = c.high - c.low;
+    if (range === 0 || body === 0) continue;
+    if (upperWick < body * 2) continue;          // upper wick must be 2× body
+    if (lowerWick > body * 0.5) continue;        // minimal lower wick
+    if (body / range > 0.35) continue;           // body must be small relative to range
+
+    const tfW  = TIMEFRAME_WEIGHT[c.timeframe] ?? 0.55;
+    const relevantZone = zones.some(z => z.type === "resistance" && isNearZone(c.close, z));
+    let confidence = Math.round((upperWick / range) * 60 + tfW * 30 + (relevantZone ? 10 : 0));
+    confidence = Math.min(confidence, 100);
+
+    signals.push({ pair: c.pair, timeframe: c.timeframe, type: "shooting_star", timestamp: c.timestamp, price: c.close, confidence });
+  }
+  return signals;
+}
+
+/**
+ * Hammer — bullish reversal single candle.
+ * Small real body near the high, lower wick ≥ 2× body, little/no upper wick.
+ */
+export function detectHammer(
+  candles: Candle[],
+  zones: SupportResistanceZone[] = []
+): CandlestickSignal[] {
+  const signals: CandlestickSignal[] = [];
+  for (const c of candles) {
+    const body      = Math.abs(c.close - c.open);
+    const lowerWick = Math.min(c.open, c.close) - c.low;
+    const upperWick = c.high - Math.max(c.open, c.close);
+    const range     = c.high - c.low;
+    if (range === 0 || body === 0) continue;
+    if (lowerWick < body * 2) continue;
+    if (upperWick > body * 0.5) continue;
+    if (body / range > 0.35) continue;
+
+    const tfW  = TIMEFRAME_WEIGHT[c.timeframe] ?? 0.55;
+    const relevantZone = zones.some(z => z.type === "support" && isNearZone(c.close, z));
+    let confidence = Math.round((lowerWick / range) * 60 + tfW * 30 + (relevantZone ? 10 : 0));
+    confidence = Math.min(confidence, 100);
+
+    signals.push({ pair: c.pair, timeframe: c.timeframe, type: "hammer", timestamp: c.timestamp, price: c.close, confidence });
+  }
+  return signals;
+}
+
+/**
+ * Morning Star — 3-candle bullish reversal.
+ * Candle 1: large bearish. Candle 2: small body (indecision). Candle 3: large bullish closing above 50% of candle 1.
+ */
+export function detectMorningStar(
+  candles: Candle[],
+  zones: SupportResistanceZone[] = []
+): CandlestickSignal[] {
+  const signals: CandlestickSignal[] = [];
+  for (let i = 2; i < candles.length; i++) {
+    const c1 = candles[i - 2]!;
+    const c2 = candles[i - 1]!;
+    const c3 = candles[i]!;
+
+    const body1 = c1.open - c1.close;   // bearish: positive
+    const body2 = Math.abs(c2.close - c2.open);
+    const body3 = c3.close - c3.open;   // bullish: positive
+
+    if (body1 < 0) continue;            // c1 must be bearish
+    if (body3 < 0) continue;            // c3 must be bullish
+    if (body2 > body1 * 0.3) continue;  // c2 must be small (star)
+
+    const midC1 = (c1.open + c1.close) / 2;
+    if (c3.close < midC1) continue;     // c3 must close above 50% of c1
+
+    // Additional: c2 gaps down from c1 (relaxed for forex — just check c2 body is lower)
+    if (Math.max(c2.open, c2.close) > c1.close + body1 * 0.1) continue;
+
+    const tfW = TIMEFRAME_WEIGHT[c3.timeframe] ?? 0.55;
+    const atSupport = zones.some(z => z.type === "support" && isNearZone(c3.close, z));
+    const confidence = Math.min(100, Math.round(
+      (body3 / body1) * 40 + tfW * 40 + (atSupport ? 20 : 0)
+    ));
+
+    signals.push({ pair: c3.pair, timeframe: c3.timeframe, type: "morning_star", timestamp: c3.timestamp, price: c3.close, confidence });
+  }
+  return signals;
+}
+
+/**
+ * Evening Star — 3-candle bearish reversal (mirror of Morning Star).
+ * Candle 1: large bullish. Candle 2: small body. Candle 3: large bearish closing below 50% of candle 1.
+ */
+export function detectEveningStar(
+  candles: Candle[],
+  zones: SupportResistanceZone[] = []
+): CandlestickSignal[] {
+  const signals: CandlestickSignal[] = [];
+  for (let i = 2; i < candles.length; i++) {
+    const c1 = candles[i - 2]!;
+    const c2 = candles[i - 1]!;
+    const c3 = candles[i]!;
+
+    const body1 = c1.close - c1.open;   // bullish: positive
+    const body2 = Math.abs(c2.close - c2.open);
+    const body3 = c3.open - c3.close;   // bearish: positive
+
+    if (body1 < 0) continue;
+    if (body3 < 0) continue;
+    if (body2 > body1 * 0.3) continue;
+
+    const midC1 = (c1.open + c1.close) / 2;
+    if (c3.close > midC1) continue;
+
+    if (Math.min(c2.open, c2.close) < c1.close - body1 * 0.1) continue;
+
+    const tfW = TIMEFRAME_WEIGHT[c3.timeframe] ?? 0.55;
+    const atResistance = zones.some(z => z.type === "resistance" && isNearZone(c3.close, z));
+    const confidence = Math.min(100, Math.round(
+      (body3 / body1) * 40 + tfW * 40 + (atResistance ? 20 : 0)
+    ));
+
+    signals.push({ pair: c3.pair, timeframe: c3.timeframe, type: "evening_star", timestamp: c3.timestamp, price: c3.close, confidence });
+  }
+  return signals;
+}
+
+/**
  * Detect all supported candlestick signals.
  */
 export function detectAllSignals(
@@ -160,5 +304,9 @@ export function detectAllSignals(
   return [
     ...detectBullishEngulfing(candles, zones),
     ...detectBearishEngulfing(candles, zones),
+    ...detectMorningStar(candles, zones),
+    ...detectEveningStar(candles, zones),
+    ...detectShootingStar(candles, zones),
+    ...detectHammer(candles, zones),
   ].sort((a, b) => a.timestamp - b.timestamp);
 }

@@ -26,9 +26,18 @@
         <div class="section-label">TIMEFRAME</div>
         <div id="tf-buttons">
           <button class="tf-btn" data-tf="1H">1H</button>
+          <button class="tf-btn" data-tf="2H">2H</button>
           <button class="tf-btn active" data-tf="4H">4H</button>
           <button class="tf-btn" data-tf="D">D</button>
           <button class="tf-btn" data-tf="W">W</button>
+        </div>
+      </div>
+
+      <div id="chart-type-selector">
+        <div class="section-label">CHART TYPE</div>
+        <div id="chart-type-buttons">
+          <button class="tf-btn active" id="ct-candles" data-ct="candle_solid">Candles</button>
+          <button class="tf-btn" id="ct-line" data-ct="area">Line</button>
         </div>
       </div>
 
@@ -36,8 +45,8 @@
         <div class="section-label">OVERLAYS</div>
         <div class="overlay-toggles">
           <div class="overlay-row">
-            <span class="overlay-name">Support &amp; Resistance</span>
-            <button class="toggle-btn active" id="toggle-zones" data-overlay="zones">ON</button>
+            <span class="overlay-name">Auto S&amp;R Zones</span>
+            <button class="toggle-btn" id="toggle-zones" data-overlay="zones">OFF</button>
           </div>
           <div class="overlay-row">
             <span class="overlay-name">HH / HL / LH / LL</span>
@@ -53,7 +62,7 @@
           </div>
           <div class="overlay-row">
             <span class="overlay-name">Trade Position</span>
-            <button class="toggle-btn active" id="toggle-trade" data-overlay="trade">ON</button>
+            <button class="toggle-btn" id="toggle-trade" data-overlay="trade">OFF</button>
           </div>
         </div>
       </div>
@@ -130,22 +139,172 @@
           <span class="value" id="tp-lots">—</span>
         </div>
         <button id="save-trade-btn">Save Trade Idea</button>
-        <div class="risk-note">Risk is fixed at £100 per trade</div>
+        <button id="execute-trade-btn" class="hidden">▶ Execute on cTrader</button>
+        <div class="risk-note" id="risk-note">Risk: <span id="risk-note-amount">£100</span> per trade</div>
         <div id="save-status" class="hidden"></div>
+      </div>
+
+      <div id="news-panel">
+        <div class="section-label news-label">
+          NEWS
+          <span id="news-sentiment-badge" class="news-badge hidden"></span>
+          <button id="news-refresh-btn" class="news-refresh" title="Refresh news">↻</button>
+        </div>
+        <div id="news-loading" class="news-status hidden">Loading…</div>
+        <div id="news-error" class="news-status error hidden"></div>
+        <div id="news-empty" class="news-status hidden">No relevant headlines found.</div>
+        <div id="news-list"></div>
+      </div>
+
+      <div id="ctrader-panel">
+        <div class="section-label">CTRADER</div>
+        <div id="ctrader-status-row">
+          <span id="ctrader-status-dot" class="status-dot disconnected"></span>
+          <span id="ctrader-status-text">Not connected</span>
+        </div>
+        <button id="ctrader-connect-btn">Connect cTrader</button>
       </div>
     </aside>
 
-    <!-- Chart area -->
-    <main id="chart-wrapper">
-      <div id="chart-container"></div>
-      <div id="chart-loading" class="chart-overlay hidden">
-        <div class="spinner"></div>
-        <span>Loading candles…</span>
+    <!-- Main content area -->
+    <main id="main-content">
+
+      <!-- Top bar: tabs + drawing toolbar -->
+      <div id="tab-bar">
+        <button class="tab-btn active" data-tab="chart">Chart</button>
+        <button class="tab-btn" data-tab="positions">Positions</button>
+        <button class="tab-btn" data-tab="history">History</button>
+
+        <div class="tab-bar-separator"></div>
+
+        <button class="draw-tool-btn" id="draw-support" title="Click chart to place support line">— Support</button>
+        <button class="draw-tool-btn" id="draw-resistance" title="Click chart to place resistance line">— Resistance</button>
+        <button class="draw-tool-btn long-tool" id="draw-long" title="Place long trade setup">▲ Long</button>
+        <button class="draw-tool-btn short-tool" id="draw-short" title="Place short trade setup">▼ Short</button>
+        <button class="draw-tool-btn clear-tool" id="draw-clear" title="Clear all drawings">✕ Clear</button>
+        <span id="draw-hint" class="draw-hint-inline hidden">Click chart to place — ESC to cancel</span>
+
+        <div class="tab-bar-separator"></div>
+
+        <div id="risk-btn-wrap">
+          <button id="risk-settings-btn" title="Risk Settings">⚙ Risk</button>
+          <div id="risk-dropdown" class="hidden">
+            <div class="risk-dropdown-title">Risk Settings</div>
+            <div class="risk-dropdown-row">
+              <label for="risk-balance">Account Balance (£)</label>
+              <input type="number" id="risk-balance" min="100" max="1000000" step="100" value="10000" />
+            </div>
+            <div class="risk-dropdown-row">
+              <label for="risk-percent">Risk per Trade (%)</label>
+              <input type="number" id="risk-percent" min="0.1" max="10" step="0.1" value="1" />
+            </div>
+            <div class="risk-dropdown-row">
+              <label for="risk-rr">Min R:R Ratio</label>
+              <input type="number" id="risk-rr" min="1" max="10" step="0.1" value="1.2" />
+            </div>
+            <div class="risk-dropdown-divider"></div>
+            <div class="risk-dropdown-summary">
+              Max Risk: <strong id="risk-amount-display">£100.00</strong>
+            </div>
+          </div>
+        </div>
       </div>
-      <div id="chart-error" class="chart-overlay hidden">
-        <span id="chart-error-msg"></span>
+
+      <!-- Chart tab -->
+      <div id="tab-chart" class="tab-panel active">
+        <div id="chart-container"></div>
+        <div id="chart-loading" class="chart-overlay hidden">
+          <div class="spinner"></div>
+          <span>Loading candles…</span>
+        </div>
+        <div id="chart-error" class="chart-overlay hidden">
+          <span id="chart-error-msg"></span>
+        </div>
       </div>
+
+      <!-- Positions tab -->
+      <div id="tab-positions" class="tab-panel hidden">
+        <div class="data-panel">
+          <div class="data-panel-header">
+            <span>Open Positions</span>
+            <button id="refresh-positions" class="small-btn">↻ Refresh</button>
+          </div>
+          <div id="positions-loading" class="panel-status hidden">Loading…</div>
+          <div id="positions-error" class="panel-status error hidden"></div>
+          <div id="positions-empty" class="panel-status hidden">No open positions.</div>
+          <table id="positions-table" class="data-table hidden">
+            <thead>
+              <tr>
+                <th>Pair</th>
+                <th>Dir</th>
+                <th>Lots</th>
+                <th>Open</th>
+                <th>SL</th>
+                <th>TP</th>
+                <th>Opened</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="positions-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- History tab -->
+      <div id="tab-history" class="tab-panel hidden">
+        <div class="data-panel">
+          <div class="data-panel-header">
+            <span>Trade History</span>
+            <div class="header-controls">
+              <select id="history-days" class="small-select">
+                <option value="7">Last 7 days</option>
+                <option value="30" selected>Last 30 days</option>
+                <option value="90">Last 90 days</option>
+              </select>
+              <button id="refresh-history" class="small-btn">↻ Refresh</button>
+            </div>
+          </div>
+          <div id="history-loading" class="panel-status hidden">Loading…</div>
+          <div id="history-error" class="panel-status error hidden"></div>
+          <div id="history-empty" class="panel-status hidden">No trade history found.</div>
+          <table id="history-table" class="data-table hidden">
+            <thead>
+              <tr>
+                <th>Pair</th>
+                <th>Dir</th>
+                <th>Lots</th>
+                <th>Entry</th>
+                <th>Close</th>
+                <th>Closed</th>
+                <th>P&amp;L</th>
+              </tr>
+            </thead>
+            <tbody id="history-body"></tbody>
+          </table>
+        </div>
+      </div>
+
     </main>
+
+    <!-- Execute trade confirmation modal -->
+    <div id="execute-modal" class="modal-backdrop hidden">
+      <div class="modal">
+        <div class="modal-title">Confirm Trade</div>
+        <div class="modal-body">
+          <div class="modal-row"><span>Pair</span><strong id="m-pair">—</strong></div>
+          <div class="modal-row"><span>Direction</span><strong id="m-dir">—</strong></div>
+          <div class="modal-row"><span>Lots</span><strong id="m-lots">—</strong></div>
+          <div class="modal-row"><span>Stop Loss</span><strong id="m-sl">—</strong></div>
+          <div class="modal-row"><span>Take Profit</span><strong id="m-tp">—</strong></div>
+          <div class="modal-row"><span>Risk</span><strong id="m-risk">£100</strong></div>
+        </div>
+        <div class="modal-note">This will place a live order on your cTrader demo account. You make the final decision.</div>
+        <div class="modal-actions">
+          <button id="modal-cancel" class="modal-btn cancel">Cancel</button>
+          <button id="modal-confirm" class="modal-btn confirm">Place Order</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script type="module" src="/src/main.ts"></script>

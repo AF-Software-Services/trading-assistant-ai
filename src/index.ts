@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { handleMcpRequest } from "./mcp/server.ts";
 import { createApiRouter } from "./api/routes.ts";
+import { createCTraderRouter } from "./ctrader/routes.ts";
 import { handleCronTrigger } from "./scheduler/cron.ts";
 
 export interface Env {
@@ -9,6 +10,9 @@ export interface Env {
   ENVIRONMENT: string;
   MARKET_DATA_PROVIDER: string;
   TWELVE_DATA_API_KEY: string;
+  CTRADER_CLIENT_ID: string;
+  CTRADER_CLIENT_SECRET: string;
+  CTRADER_ACCOUNT_ID: string;
 }
 
 const app = new Hono<{ Bindings: Env }>();
@@ -34,6 +38,10 @@ app.all("/mcp", async (c) => {
 // ── REST API ──────────────────────────────────────────────────────────────────
 const apiRouter = createApiRouter();
 app.route("/api/v1", apiRouter);
+
+// ── cTrader integration ───────────────────────────────────────────────────────
+const cTraderRouter = createCTraderRouter();
+app.route("/", cTraderRouter);
 
 // ── Cloudflare Worker export ──────────────────────────────────────────────────
 export default {

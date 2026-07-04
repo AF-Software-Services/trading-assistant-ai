@@ -9,6 +9,9 @@ let activePair      = 'EUR/USD'
 let activeTimeframe = '4H'
 let chart: TradingChart
 let tradePanel: TradePanel
+let accountBalance  = parseFloat(localStorage.getItem('risk_balance')  ?? '10000')
+let riskPercent     = parseFloat(localStorage.getItem('risk_percent')  ?? '1')
+let rewardRisk      = parseFloat(localStorage.getItem('risk_rr')       ?? '1.2')
 
 // ── DOM helpers ───────────────────────────────────────────────────────────────
 function el<T extends HTMLElement>(id: string): T {
@@ -47,13 +50,23 @@ function initPairButtons(): void {
   })
 }
 
-function initTfButtons(): void {
-  document.querySelectorAll<HTMLButtonElement>('.tf-btn').forEach(btn => {
+function initChartTypeButtons(): void {
+  document.querySelectorAll<HTMLButtonElement>('[data-ct]').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'))
+      document.querySelectorAll('[data-ct]').forEach(b => b.classList.remove('active'))
+      btn.classList.add('active')
+      chart.setChartType(btn.dataset.ct as 'candle_solid' | 'area')
+    })
+  })
+}
+
+function initTfButtons(): void {
+  document.querySelectorAll<HTMLButtonElement>('#tf-buttons .tf-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#tf-buttons .tf-btn').forEach(b => b.classList.remove('active'))
       btn.classList.add('active')
       activeTimeframe = btn.dataset.tf!
-      loadCandles()
+      loadAll()
     })
   })
 }
@@ -136,10 +149,11 @@ function updateAnalysisPanel(data: AnalysisResult): void {
 async function loadAnalysis(candles?: Awaited<ReturnType<typeof getCandles>>): Promise<void> {
   showAnalysisLoading(true)
   try {
-    const data = await getAnalysis(activePair)
+    const data = await getAnalysis(activePair, activeTimeframe, { accountBalance, riskPercent, rewardRisk })
     updateAnalysisPanel(data)
     autoDirection(data)
     if (data.atr) chart.setSuggestedStop(data.atr)
+    if (data.htfZones) chart.setHtfZones(data.htfZones)
     chart.applyZones(data.zones)
     if (data.structure?.swingPoints) {
       chart.applySwingPoints(data.structure.swingPoints)
@@ -175,7 +189,91 @@ async function loadAll(): Promise<void> {
   } finally {
     showChartLoading(false)
   }
-  await loadAnalysis(candles)
+  await Promise.all([loadAnalysis(candles), loadNews(activePair)])
+}
+
+// ── News panel ────────────────────────────────────────────────────────────────
+interface NewsItem {
+  title: string
+  link: string
+  pubDate: string
+  source: string
+  sentiment: 'bullish' | 'bearish' | 'neutral'
+  description: string
+}
+
+interface PairNews {
+  pair: string
+  items: NewsItem[]
+  cachedAt: number
+  sentiment: { bullish: number; bearish: number; neutral: number; overall: 'bullish' | 'bearish' | 'neutral' }
+}
+
+function timeAgo(dateStr: string): string {
+  if (!dateStr) return ''
+  const ms = Date.now() - new Date(dateStr).getTime()
+  const h  = Math.floor(ms / 3_600_000)
+  const d  = Math.floor(h / 24)
+  if (d > 0)  return `${d}d ago`
+  if (h > 0)  return `${h}h ago`
+  const m = Math.floor(ms / 60_000)
+  return m > 0 ? `${m}m ago` : '< 1m ago'
+}
+
+async function loadNews(pair: string): Promise<void> {
+  const loading = el('news-loading')
+  const errorEl = el('news-error')
+  const emptyEl = el('news-empty')
+  const listEl  = el('news-list')
+  const badge   = el('news-sentiment-badge')
+
+  loading.classList.remove('hidden')
+  errorEl.classList.add('hidden')
+  emptyEl.classList.add('hidden')
+  listEl.innerHTML = ''
+  badge.classList.add('hidden')
+
+  try {
+    const res = await fetch(`/api/v1/news/${encodeURIComponent(pair)}`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const news = await res.json() as PairNews
+
+    loading.classList.add('hidden')
+
+    if (!news.items || news.items.length === 0) {
+      emptyEl.classList.remove('hidden')
+      return
+    }
+
+    // Update sentiment badge
+    badge.textContent = news.sentiment.overall.toUpperCase()
+    badge.className = `news-badge ${news.sentiment.overall}`
+    badge.classList.remove('hidden')
+
+    // Render headlines
+    listEl.innerHTML = news.items.map(item => `
+      <a class="news-item" href="${item.link || '#'}" target="_blank" rel="noopener noreferrer">
+        <div class="news-item-title">${escapeHtml(item.title)}</div>
+        <div class="news-item-meta">
+          <span class="news-item-source">${escapeHtml(item.source)}</span>
+          ${item.pubDate ? `<span class="news-item-dot">·</span><span class="news-item-age">${timeAgo(item.pubDate)}</span>` : ''}
+          <span class="news-sentiment-tag ${item.sentiment}">${item.sentiment.toUpperCase()}</span>
+        </div>
+      </a>
+    `).join('')
+  } catch (err) {
+    loading.classList.add('hidden')
+    errorEl.textContent = `News unavailable: ${(err as Error).message}`
+    errorEl.classList.remove('hidden')
+  }
+}
+
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+function initNews(): void {
+  el('news-refresh-btn').addEventListener('click', () => loadNews(activePair))
 }
 
 // ── Direction toggle (BUY / SELL) ─────────────────────────────────────────────
@@ -225,6 +323,49 @@ function autoDirection(data: AnalysisResult): void {
   setDirection(dir)
 }
 
+// ── Drawing tools ─────────────────────────────────────────────────────────────
+function initDrawingTools(): void {
+  const hint = document.getElementById('draw-hint')!
+
+  const setDrawMode = (active: boolean) => {
+    document.querySelectorAll('.draw-tool-btn').forEach(b => b.classList.remove('active'))
+    hint.classList.toggle('hidden', !active)
+  }
+
+  document.getElementById('draw-support')?.addEventListener('click', () => {
+    setDrawMode(true)
+    document.getElementById('draw-support')!.classList.add('active')
+    chart.startDrawSR('support', () => setDrawMode(false))
+  })
+
+  document.getElementById('draw-resistance')?.addEventListener('click', () => {
+    setDrawMode(true)
+    document.getElementById('draw-resistance')!.classList.add('active')
+    chart.startDrawSR('resistance', () => setDrawMode(false))
+  })
+
+  document.getElementById('draw-long')?.addEventListener('click', () => {
+    chart.placeTradeSetup('buy')
+  })
+
+  document.getElementById('draw-short')?.addEventListener('click', () => {
+    chart.placeTradeSetup('sell')
+  })
+
+  document.getElementById('draw-clear')?.addEventListener('click', () => {
+    chart.clearUserDrawings()
+    chart.cancelDraw()
+    setDrawMode(false)
+  })
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      chart.cancelDraw()
+      setDrawMode(false)
+    }
+  })
+}
+
 // ── Overlay toggles ───────────────────────────────────────────────────────────
 function initOverlayToggles(): void {
   const toggles: Array<{ id: string; fn: (v: boolean) => void }> = [
@@ -244,6 +385,311 @@ function initOverlayToggles(): void {
   }
 }
 
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function initTabs(): void {
+  document.querySelectorAll<HTMLButtonElement>('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'))
+      document.querySelectorAll('.tab-panel').forEach(p => {
+        p.classList.remove('active')
+        p.classList.add('hidden')
+      })
+      btn.classList.add('active')
+      const panel = document.getElementById(`tab-${btn.dataset.tab}`)!
+      panel.classList.remove('hidden')
+      panel.classList.add('active')
+      if (btn.dataset.tab === 'positions') loadPositions()
+      if (btn.dataset.tab === 'history')   loadHistory()
+    })
+  })
+}
+
+// ── cTrader status ────────────────────────────────────────────────────────────
+async function checkCTraderStatus(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/v1/ctrader/status')
+    const data = await res.json() as { connected: boolean }
+    const dot  = document.getElementById('ctrader-status-dot')!
+    const txt  = document.getElementById('ctrader-status-text')!
+    const btn  = document.getElementById('ctrader-connect-btn')!
+    const exec = document.getElementById('execute-trade-btn')!
+    if (data.connected) {
+      dot.className  = 'status-dot connected'
+      txt.textContent = 'Connected (Demo)'
+      btn.textContent = '✓ Connected'
+      btn.classList.add('connected')
+      exec.classList.remove('hidden')
+    } else {
+      dot.className  = 'status-dot disconnected'
+      txt.textContent = 'Not connected'
+      btn.textContent = 'Connect cTrader'
+      btn.classList.remove('connected')
+      exec.classList.add('hidden')
+    }
+    return data.connected
+  } catch { return false }
+}
+
+function initCTrader(): void {
+  document.getElementById('ctrader-connect-btn')?.addEventListener('click', () => {
+    window.location.href = '/auth/ctrader'
+  })
+  document.getElementById('execute-trade-btn')?.addEventListener('click', showExecuteModal)
+
+  // Check if just returned from OAuth
+  if (new URLSearchParams(window.location.search).get('ctrader') === 'connected') {
+    history.replaceState({}, '', '/')
+  }
+  checkCTraderStatus()
+}
+
+// ── Execute trade modal ───────────────────────────────────────────────────────
+function showExecuteModal(): void {
+  const state = (window as any).__tradeState as {
+    entry: number; sl: number; tp: number; lots: number; direction: string
+  } | undefined
+  if (!state) return
+
+  const dec = activePair.includes('JPY') ? 3 : 5
+  el('m-pair').textContent = activePair
+  el('m-dir').textContent  = state.direction.toUpperCase()
+  el('m-lots').textContent = state.lots.toFixed(2)
+  el('m-sl').textContent   = state.sl.toFixed(dec)
+  el('m-tp').textContent   = state.tp.toFixed(dec)
+  el('execute-modal').classList.remove('hidden')
+}
+
+function initExecuteModal(): void {
+  el('modal-cancel').addEventListener('click', () => {
+    el('execute-modal').classList.add('hidden')
+  })
+  el('modal-confirm').addEventListener('click', async () => {
+    const state = (window as any).__tradeState as {
+      entry: number; sl: number; tp: number; lots: number; direction: 'buy' | 'sell'
+    }
+    el('modal-confirm').textContent = 'Placing…'
+    el('modal-confirm').setAttribute('disabled', 'true')
+    try {
+      const res = await fetch('/api/v1/ctrader/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pair:       activePair,
+          direction:  state.direction,
+          lots:       state.lots,
+          stopLoss:   state.sl,
+          takeProfit: state.tp,
+        }),
+      })
+      const data = await res.json() as { success?: boolean; error?: string }
+      if (data.success) {
+        el('execute-modal').classList.add('hidden')
+        alert('Order placed successfully on cTrader demo account.')
+      } else {
+        alert(`Order failed: ${data.error}`)
+      }
+    } catch (e) {
+      alert(`Error: ${(e as Error).message}`)
+    } finally {
+      el('modal-confirm').textContent = 'Place Order'
+      el('modal-confirm').removeAttribute('disabled')
+    }
+  })
+}
+
+// ── Positions ─────────────────────────────────────────────────────────────────
+interface PositionRow {
+  positionId: number; symbol: string; direction: string;
+  volume: number; openPrice: number; stopLoss?: number; takeProfit?: number; openTime: number;
+}
+
+async function loadPositions(): Promise<void> {
+  el('positions-loading').classList.remove('hidden')
+  el('positions-error').classList.add('hidden')
+  el('positions-empty').classList.add('hidden')
+  el('positions-table').classList.add('hidden')
+
+  try {
+    const res  = await fetch('/api/v1/ctrader/positions')
+    const data = await res.json() as { positions?: PositionRow[]; error?: string }
+    if (data.error) throw new Error(data.error)
+
+    const positions = data.positions ?? []
+    if (positions.length === 0) {
+      el('positions-empty').classList.remove('hidden')
+      return
+    }
+
+    const tbody = el<HTMLTableSectionElement>('positions-body')
+    tbody.innerHTML = positions.map(p => {
+      const lots = (p.volume / 100).toFixed(2)
+      const dec  = p.symbol.includes('JPY') ? 3 : 5
+      const dir  = p.direction === 'buy' ? 'buy' : 'sell'
+      const date = p.openTime ? new Date(p.openTime).toLocaleDateString('en-GB') : '—'
+      return `<tr>
+        <td>${p.symbol}</td>
+        <td class="${dir}">${dir.toUpperCase()}</td>
+        <td>${lots}</td>
+        <td>${p.openPrice.toFixed(dec)}</td>
+        <td>${p.stopLoss  ? p.stopLoss.toFixed(dec)  : '—'}</td>
+        <td>${p.takeProfit ? p.takeProfit.toFixed(dec) : '—'}</td>
+        <td>${date}</td>
+        <td><button class="close-btn" data-id="${p.positionId}" data-vol="${p.volume}">Close</button></td>
+      </tr>`
+    }).join('')
+
+    tbody.querySelectorAll<HTMLButtonElement>('.close-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Close this position?')) return
+        btn.textContent = 'Closing…'
+        btn.disabled = true
+        try {
+          const res = await fetch(`/api/v1/ctrader/positions/${btn.dataset.id}/close`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ volume: parseInt(btn.dataset.vol!) }),
+          })
+          const d = await res.json() as { success?: boolean; error?: string }
+          if (d.success) loadPositions()
+          else alert(`Close failed: ${d.error}`)
+        } catch (e) { alert(`Error: ${(e as Error).message}`) }
+      })
+    })
+
+    el('positions-table').classList.remove('hidden')
+  } catch (e) {
+    el<HTMLElement>('positions-error').textContent = (e as Error).message
+    el('positions-error').classList.remove('hidden')
+  } finally {
+    el('positions-loading').classList.add('hidden')
+  }
+}
+
+// ── History ───────────────────────────────────────────────────────────────────
+interface DealRow {
+  dealId: number; symbol: string; direction: string;
+  volume: number; entryPrice: number; closePrice?: number; closeTime?: number; profit?: number;
+}
+
+async function loadHistory(): Promise<void> {
+  const days = (el<HTMLSelectElement>('history-days')).value
+  el('history-loading').classList.remove('hidden')
+  el('history-error').classList.add('hidden')
+  el('history-empty').classList.add('hidden')
+  el('history-table').classList.add('hidden')
+
+  try {
+    const res  = await fetch(`/api/v1/ctrader/history?days=${days}`)
+    const data = await res.json() as { deals?: DealRow[]; error?: string }
+    if (data.error) throw new Error(data.error)
+
+    const deals = data.deals ?? []
+    if (deals.length === 0) {
+      el('history-empty').classList.remove('hidden')
+      return
+    }
+
+    const tbody = el<HTMLTableSectionElement>('history-body')
+    tbody.innerHTML = deals.map(d => {
+      const lots   = (d.volume / 100).toFixed(2)
+      const dec    = d.symbol.includes('JPY') ? 3 : 5
+      const dir    = d.direction === 'buy' ? 'buy' : 'sell'
+      const date   = d.closeTime ? new Date(d.closeTime).toLocaleDateString('en-GB') : '—'
+      const pnl    = d.profit != null ? d.profit.toFixed(2) : null
+      const pnlCls = pnl && parseFloat(pnl) >= 0 ? 'profit-positive' : 'profit-negative'
+      return `<tr>
+        <td>${d.symbol}</td>
+        <td class="${dir}">${dir.toUpperCase()}</td>
+        <td>${lots}</td>
+        <td>${d.entryPrice.toFixed(dec)}</td>
+        <td>${d.closePrice ? d.closePrice.toFixed(dec) : '—'}</td>
+        <td>${date}</td>
+        <td class="${pnlCls}">${pnl ? `£${pnl}` : '—'}</td>
+      </tr>`
+    }).join('')
+
+    el('history-table').classList.remove('hidden')
+  } catch (e) {
+    el<HTMLElement>('history-error').textContent = (e as Error).message
+    el('history-error').classList.remove('hidden')
+  } finally {
+    el('history-loading').classList.add('hidden')
+  }
+}
+
+// ── Risk settings ─────────────────────────────────────────────────────────────
+function updateRiskDisplay(): void {
+  const amount = accountBalance * (riskPercent / 100)
+  const fmt = `£${amount.toFixed(2)}`
+  const displayEl = document.getElementById('risk-amount-display')
+  const noteEl    = document.getElementById('risk-note-amount')
+  const riskEl    = document.getElementById('tp-risk')
+  if (displayEl) displayEl.textContent = fmt
+  if (noteEl)    noteEl.textContent    = fmt
+  if (riskEl && riskEl.textContent === '—') return  // don't overwrite real value
+}
+
+function initRiskSettings(): void {
+  const balanceInput = el<HTMLInputElement>('risk-balance')
+  const percentInput = el<HTMLInputElement>('risk-percent')
+  const rrInput      = el<HTMLInputElement>('risk-rr')
+  const btn          = el<HTMLButtonElement>('risk-settings-btn')
+  const dropdown     = el('risk-dropdown')
+
+  // Restore saved values
+  balanceInput.value = String(accountBalance)
+  percentInput.value = String(riskPercent)
+  rrInput.value      = String(rewardRisk)
+  updateRiskDisplay()
+
+  // Toggle dropdown
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    const open = dropdown.classList.toggle('hidden') === false
+    btn.classList.toggle('active', open)
+  })
+
+  // Close on outside click
+  document.addEventListener('click', () => {
+    dropdown.classList.add('hidden')
+    btn.classList.remove('active')
+  })
+
+  dropdown.addEventListener('click', (e) => e.stopPropagation())
+
+  let saveTimer: ReturnType<typeof setTimeout> | null = null
+
+  const saveToKv = () => {
+    // Debounce — only send after user stops typing for 1s
+    if (saveTimer) clearTimeout(saveTimer)
+    saveTimer = setTimeout(() => {
+      fetch('/api/v1/settings/risk', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountBalance, riskPercent, rewardRisk }),
+      }).catch(() => {/* silently ignore — localStorage is the source of truth locally */})
+    }, 1000)
+  }
+
+  const onChange = () => {
+    accountBalance = parseFloat(balanceInput.value) || 10000
+    riskPercent    = parseFloat(percentInput.value) || 1
+    rewardRisk     = parseFloat(rrInput.value)      || 1.2
+    localStorage.setItem('risk_balance', String(accountBalance))
+    localStorage.setItem('risk_percent', String(riskPercent))
+    localStorage.setItem('risk_rr',      String(rewardRisk))
+    updateRiskDisplay()
+    saveToKv()
+  }
+
+  balanceInput.addEventListener('input', onChange)
+  percentInput.addEventListener('input', onChange)
+  rrInput.addEventListener('input', onChange)
+
+  // Sync to KV once on load so Claude Desktop always has the current values
+  saveToKv()
+}
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 function init(): void {
   chart = new TradingChart('chart-container')
@@ -256,11 +702,21 @@ function init(): void {
     tradePanel.update(state)
   })
 
+  initTabs()
   initPairButtons()
   initTfButtons()
+  initChartTypeButtons()
   applyUrlParams()
   initDirectionToggle()
+  initDrawingTools()
   initOverlayToggles()
+  initRiskSettings()
+  initNews()
+  initCTrader()
+  initExecuteModal()
+  document.getElementById('refresh-positions')?.addEventListener('click', loadPositions)
+  document.getElementById('refresh-history')?.addEventListener('click', loadHistory)
+  document.getElementById('history-days')?.addEventListener('change', loadHistory)
 
   // Update pair/TF on chart after URL params applied
   chart.setPair(activePair)

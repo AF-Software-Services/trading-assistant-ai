@@ -3,6 +3,7 @@ import type { CurrencyPair, Timeframe, Candle, PriceTick } from "../types/market
 
 const INTERVAL_MAP: Record<Timeframe, string> = {
   "1H": "1h",
+  "2H": "2h",
   "4H": "4h",
   "D":  "1day",
   "W":  "1week",
@@ -16,7 +17,7 @@ export class TwelveDataProvider implements MarketDataProvider {
     const interval = INTERVAL_MAP[timeframe];
     const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=${interval}&outputsize=${count}&apikey=${this.apiKey}&format=JSON`;
 
-    const res = await fetch(url);
+    const res = await fetch(url, { cf: { cacheEverything: false } } as RequestInit);
     if (!res.ok) throw new Error(`Twelve Data HTTP ${res.status}`);
 
     const data = await res.json() as { status?: string; message?: string; values?: Array<{ datetime: string; open: string; high: string; low: string; close: string }> };

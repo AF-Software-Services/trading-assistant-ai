@@ -43,7 +43,7 @@ export class TradingChart {
   private tpId:     string | null = null
   private slZoneId: string | null = null
   private tpZoneId: string | null = null
-  private visTradeLines = true
+  private visTradeLines = false
 
   // Zone overlay IDs
   private zoneIds: string[] = []
@@ -54,8 +54,11 @@ export class TradingChart {
   // Pattern overlay IDs
   private patternIds: string[] = []
 
+  // User-drawn overlay IDs (S/R lines + manual trade setups)
+  private userDrawingIds: string[] = []
+
   // Visibility state for each overlay type
-  private visZones     = true
+  private visZones     = false  // default off — user draws their own
   private visStructure = true
   private visSignals   = true
   private visPatterns  = true
@@ -71,6 +74,8 @@ export class TradingChart {
   private suggestedStopPips = 30
   // Trade direction: 1 = long, -1 = short
   private direction: 1 | -1 = 1
+  // Weekly+Daily zones used for TP targeting in swing trades
+  private htfZones: Zone[] = []
 
   private onTradeLinesChange: TradeLinesChangeCallback | null = null
 
@@ -223,9 +228,14 @@ export class TradingChart {
     for (const zone of zones) {
       const isResistance = zone.type === 'resistance'
       const color = isResistance ? '#f85149' : '#3fb950'
-      const tfLabel = zone.timeframe === 'W' ? 'W'
-        : zone.timeframe === 'D' ? 'D'
-        : 'I'
+      const tf = zone.timeframe === 'W' ? 'Weekly'
+        : zone.timeframe === 'D' ? 'Daily'
+        : zone.timeframe === '4H' ? '4H'
+        : '1H'
+      const zoneType  = isResistance ? 'Resistance' : 'Support'
+      const strength  = zone.strength >= 70 ? 'Strong' : zone.strength >= 40 ? 'Moderate' : 'Weak'
+      const dec       = zone.high > 10 ? 3 : 5
+      const label     = `${tf} ${strength} ${zoneType}  ${zone.low.toFixed(dec)}–${zone.high.toFixed(dec)}`
 
       const midTimestamp = this.data[Math.floor(this.data.length / 2)]?.timestamp ?? Date.now()
       const result = this.chart.createOverlay({
@@ -234,7 +244,7 @@ export class TradingChart {
           { timestamp: midTimestamp, value: zone.low },
           { timestamp: midTimestamp, value: zone.high },
         ],
-        extendData: { color, label: tfLabel },
+        extendData: { color, label },
         lock: true,
       })
       if (typeof result === 'string') this.zoneIds.push(result)
@@ -281,7 +291,14 @@ export class TradingChart {
 
     const bullishTypes = new Set(['bullish_engulfing', 'hammer'])
 
-    for (const sig of signals) {
+    // Only render signals from the last 10 candles — older signals are stale
+    // and confuse the trade lines (they can appear inside the SL zone)
+    const cutoff = candles.length > 10
+      ? candles[candles.length - 10]!.timestamp
+      : 0
+    const recentSignals = signals.filter(s => s.timestamp >= cutoff)
+
+    for (const sig of recentSignals) {
       const candle = candles.find(c => c.timestamp === sig.timestamp)
         ?? candles.find(c => Math.abs(c.timestamp - sig.timestamp) < 3600_000)
       if (!candle) continue
@@ -334,8 +351,17 @@ export class TradingChart {
     }
   }
 
+  setChartType(type: 'candle_solid' | 'area'): void {
+    this.chart.setStyles({ candle: { type } })
+  }
+
   setDirection(dir: 'buy' | 'sell'): void {
     this.direction = dir === 'buy' ? 1 : -1
+    if (this.currentPrice > 0) this.resetTradeLines()
+  }
+
+  setHtfZones(zones: Zone[]): void {
+    this.htfZones = zones
     if (this.currentPrice > 0) this.resetTradeLines()
   }
 
@@ -421,41 +447,89 @@ export class TradingChart {
     if (!this.visTradeLines) return
     this.removeTradeOverlays()
 
-    const factor   = pipFactor(this.pair)
-    const dec      = this.pair.includes('JPY') ? 3 : 5
-    const entry    = this.currentPrice
-    const stopPips = this.suggestedStopPips > 0 ? this.suggestedStopPips : 30
-    const d        = this.direction
-    const sl       = entry - d * (stopPips / factor)
-    const tp       = entry + d * (stopPips * 5 / factor)
-    const midTs    = this.data[Math.floor(this.data.length / 2)]?.timestamp ?? Date.now()
+    const factor  = pipFactor(this.pair)
+    const d       = this.direction   // 1 = long, -1 = short
+    const atrPips = this.suggestedStopPips > 0 ? this.suggestedStopPips : 30
+    const buffer  = atrPips * 0.3 / factor
+    const midTs   = this.data[Math.floor(this.data.length / 2)]?.timestamp ?? Date.now()
 
-    // Coloured zone backgrounds
-    this.slZoneId = this.createZoneRect(midTs, entry, sl, '#f85149',
+    // SL uses current-TF zones (tight, near current price)
+    const tfSupports    = this.lastZones.filter(z => z.type === 'support'    && !z.isBroken)
+    const tfResistances = this.lastZones.filter(z => z.type === 'resistance' && !z.isBroken)
+
+    // TP uses Weekly+Daily zones — swing trades target major structure levels
+    const htfResistances = this.htfZones.filter(z => z.type === 'resistance' && !z.isBroken)
+    const htfSupports    = this.htfZones.filter(z => z.type === 'support'    && !z.isBroken)
+
+    let entry: number
+    let sl: number
+    let tp: number
+
+    if (d === 1) {
+      // Long: enter at current-TF support top, SL below its floor, TP at nearest W/D resistance
+      const nearSupport    = tfSupports.sort((a, b) => b.high - a.high)
+                                       .find(z => z.high <= this.currentPrice + atrPips * 2 / factor)
+      if (nearSupport) {
+        entry = nearSupport.high
+        sl    = nearSupport.low - buffer
+      } else {
+        entry = this.currentPrice
+        sl    = entry - atrPips / factor
+      }
+      // TP: nearest W/D resistance above entry — this is the swing target
+      const htfResistance = htfResistances.sort((a, b) => a.low - b.low)
+                                          .find(z => z.low > entry)
+      tp = htfResistance ? htfResistance.low : entry + Math.abs(entry - sl) * 3
+    } else {
+      // Short: enter at current-TF resistance bottom, SL above its ceiling, TP at nearest W/D support
+      const nearResistance = tfResistances.sort((a, b) => a.low - b.low)
+                                          .find(z => z.low >= this.currentPrice - atrPips * 2 / factor)
+      if (nearResistance) {
+        entry = nearResistance.low
+        sl    = nearResistance.high + buffer
+      } else {
+        entry = this.currentPrice
+        sl    = entry + atrPips / factor
+      }
+      // TP: nearest W/D support below entry — this is the swing target
+      const htfSupport = htfSupports.sort((a, b) => b.high - a.high)
+                                    .find(z => z.high < entry)
+      tp = htfSupport ? htfSupport.high : entry - Math.abs(sl - entry) * 3
+    }
+
+    const stopPips = Math.abs(entry - sl) * factor
+    const tpPips   = Math.abs(tp - entry) * factor
+    const rr       = stopPips > 0 ? tpPips / stopPips : 0
+
+    // Draw narrow zone highlights AT the SL and TP levels — not a giant band between them
+    this.slZoneId = this.createZoneRect(midTs, sl + buffer, sl - buffer, '#f85149',
       `Stop: ${stopPips.toFixed(1)} pips  |  £100 risk`)
-    this.tpZoneId = this.createZoneRect(midTs, entry, tp, '#3fb950',
-      `Target: ${(stopPips * 5).toFixed(1)} pips  |  £${(stopPips > 0 ? 500 : 0).toFixed(0)} reward  |  R:R 5.0`)
+    this.tpZoneId = this.createZoneRect(midTs, tp - buffer, tp + buffer, '#3fb950',
+      `Take Profit: ${tpPips.toFixed(1)} pips  |  £${(100 * rr).toFixed(0)} reward  |  R:R ${rr.toFixed(1)}`)
 
     const onChange = () => {
       const state = this.getTradeLinesState()
-      // Rebuild zone rects from current dragged line positions
       if (this.slZoneId) this.chart.removeOverlay({ id: this.slZoneId })
       if (this.tpZoneId) this.chart.removeOverlay({ id: this.tpZoneId })
       const f      = pipFactor(this.pair)
       const stop   = Math.abs(state.entry - state.sl) * f
       const reward = Math.abs(state.tp - state.entry) * f
-      const rr     = stop > 0 ? reward / stop : 0
-      this.slZoneId = this.createZoneRect(midTs, state.entry, state.sl, '#f85149',
+      const rr2    = stop > 0 ? reward / stop : 0
+      const buf    = stop * 0.1 / f
+      this.slZoneId = this.createZoneRect(midTs, state.sl + buf, state.sl - buf, '#f85149',
         `Stop: ${stop.toFixed(1)} pips  |  £100 risk`)
-      this.tpZoneId = this.createZoneRect(midTs, state.entry, state.tp, '#3fb950',
-        `Target: ${reward.toFixed(1)} pips  |  £${(100 * rr).toFixed(0)} reward  |  R:R ${rr.toFixed(1)}`)
+      this.tpZoneId = this.createZoneRect(midTs, state.tp - buf, state.tp + buf, '#3fb950',
+        `Take Profit: ${reward.toFixed(1)} pips  |  £${(100 * rr2).toFixed(0)} reward  |  R:R ${rr2.toFixed(1)}`)
       this.onTradeLinesChange?.(state)
     }
+
+    // Timestamp needed so KLineChart can place the drag handle on the X axis
+    const dragTs = this.data[Math.floor(this.data.length * 0.75)]?.timestamp ?? Date.now()
 
     const mkLine = (value: number, color: string, label: string, info: string) => {
       const r = this.chart.createOverlay({
         name: 'hLine',
-        points: [{ value }],
+        points: [{ timestamp: dragTs, value }],
         extendData: { color, label, info },
         lock: false,
         onPressedMoveEnd: onChange,
@@ -463,11 +537,97 @@ export class TradingChart {
       return typeof r === 'string' ? r : null
     }
 
-    this.entryId = mkLine(entry, '#e6edf3', 'ENTRY', '')
+    this.entryId = mkLine(entry, '#f0c040', 'ENTRY', '')
     this.slId    = mkLine(sl,    '#f85149', 'SL',    `${stopPips.toFixed(1)} pips`)
-    this.tpId    = mkLine(tp,    '#3fb950', 'TP',    `${(stopPips * 5).toFixed(1)} pips  |  R:R 5.0`)
+    this.tpId    = mkLine(tp,    '#3fb950', 'TP',    `${tpPips.toFixed(1)} pips  |  R:R ${rr.toFixed(1)}`)
 
     setTimeout(onChange, 100)
+  }
+
+  // ── User drawing tools ────────────────────────────────────────────────────────
+
+  startDrawSR(type: 'support' | 'resistance', onPlaced?: (id: string) => void): void {
+    const color = type === 'support' ? '#3fb950' : '#f85149'
+    const label = type === 'support' ? 'Support' : 'Resistance'
+    this.chart.startDraw({
+      name: 'hLine',
+      extendData: { color, label, info: 'drag to adjust' },
+      lock: false,
+      onDrawEnd: (event: unknown) => {
+        const id = (event as { overlay?: { id?: string } })?.overlay?.id
+        if (id) {
+          this.userDrawingIds.push(id)
+          onPlaced?.(id)
+        }
+      },
+    } as Parameters<Chart['startDraw']>[0])
+  }
+
+  cancelDraw(): void {
+    this.chart.cancelDraw?.()
+  }
+
+  placeTradeSetup(direction: 'buy' | 'sell'): void {
+    const d       = direction === 'buy' ? 1 : -1
+    const factor  = pipFactor(this.pair)
+    const atrPips = this.suggestedStopPips > 0 ? this.suggestedStopPips : 30
+    const buffer  = atrPips * 0.3 / factor
+    const dragTs  = this.data[Math.floor(this.data.length * 0.75)]?.timestamp ?? Date.now()
+
+    const tfSupports    = this.lastZones.filter(z => z.type === 'support'    && !z.isBroken)
+    const tfResistances = this.lastZones.filter(z => z.type === 'resistance' && !z.isBroken)
+    const htfResistances = this.htfZones.filter(z => z.type === 'resistance' && !z.isBroken)
+    const htfSupports    = this.htfZones.filter(z => z.type === 'support'    && !z.isBroken)
+
+    let entry: number, sl: number, tp: number
+
+    if (d === 1) {
+      const nearSupport    = tfSupports.sort((a, b) => b.high - a.high)
+                                       .find(z => z.high <= this.currentPrice + atrPips * 2 / factor)
+      const htfResistance  = htfResistances.sort((a, b) => a.low - b.low)
+                                           .find(z => z.low > (nearSupport?.high ?? this.currentPrice))
+      entry = nearSupport ? nearSupport.high : this.currentPrice
+      sl    = nearSupport ? nearSupport.low - buffer : entry - atrPips / factor
+      tp    = htfResistance ? htfResistance.low : entry + Math.abs(entry - sl) * 3
+    } else {
+      const nearResistance = tfResistances.sort((a, b) => a.low - b.low)
+                                          .find(z => z.low >= this.currentPrice - atrPips * 2 / factor)
+      const htfSupport     = htfSupports.sort((a, b) => b.high - a.high)
+                                        .find(z => z.high < (nearResistance?.low ?? this.currentPrice))
+      entry = nearResistance ? nearResistance.low : this.currentPrice
+      sl    = nearResistance ? nearResistance.high + buffer : entry + atrPips / factor
+      tp    = htfSupport ? htfSupport.high : entry - Math.abs(sl - entry) * 3
+    }
+
+    const factor2   = pipFactor(this.pair)
+    const stopPips  = Math.abs(entry - sl) * factor2
+    const tpPips    = Math.abs(tp - entry) * factor2
+    const rr        = stopPips > 0 ? tpPips / stopPips : 0
+    const entryColor = direction === 'buy' ? '#f0c040' : '#c080f0'
+
+    const mkLine = (value: number, color: string, label: string, info: string): string | null => {
+      const r = this.chart.createOverlay({
+        name: 'hLine',
+        points: [{ timestamp: dragTs, value }],
+        extendData: { color, label, info },
+        lock: false,
+        groupId: `trade-${Date.now()}`,
+      })
+      const id = typeof r === 'string' ? r : null
+      if (id) this.userDrawingIds.push(id)
+      return id
+    }
+
+    mkLine(entry, entryColor, direction === 'buy' ? 'LONG ENTRY' : 'SHORT ENTRY', '')
+    mkLine(sl,    '#f85149',  'SL',   `${stopPips.toFixed(1)} pips`)
+    mkLine(tp,    '#3fb950',  'TP',   `${tpPips.toFixed(1)} pips  R:R ${rr.toFixed(1)}`)
+  }
+
+  clearUserDrawings(): void {
+    for (const id of this.userDrawingIds) {
+      this.chart.removeOverlay({ id })
+    }
+    this.userDrawingIds = []
   }
 
   destroy(): void {

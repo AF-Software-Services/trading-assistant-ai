@@ -70,7 +70,30 @@ describe("detectBullishEngulfing", () => {
     };
     const prev = makeCandle(1.0900, 1.0850, { timestamp: 1000 });
     const signals = detectBullishEngulfing([prev, doji]);
-    // Doji: close === open, not bullish
+    expect(signals).toHaveLength(0);
+  });
+
+  it("does NOT detect when prev candle is a doji (zero body)", () => {
+    // Doji prev: engulfing a zero-body candle is meaningless
+    const doji = makeCandle(1.0880, 1.0880, { timestamp: 1000 });
+    const curr  = makeCandle(1.0870, 1.0920, { timestamp: 2000 });
+    const signals = detectBullishEngulfing([doji, curr]);
+    expect(signals).toHaveLength(0);
+  });
+
+  it("does NOT detect when current body equals previous body (must be strictly larger)", () => {
+    // Both bodies are 50 pips — equal, not an engulf
+    const prev = makeCandle(1.0900, 1.0850, { timestamp: 1000 }); // body: 50
+    const curr = makeCandle(1.0845, 1.0895, { timestamp: 2000 }); // body: 50, same size
+    const signals = detectBullishEngulfing([prev, curr]);
+    expect(signals).toHaveLength(0);
+  });
+
+  it("does NOT detect when current open equals previous close (not strictly below)", () => {
+    // curr.open === prev.close — just touching, not opening below
+    const prev = makeCandle(1.0900, 1.0850, { timestamp: 1000 });
+    const curr = makeCandle(1.0850, 1.0920, { timestamp: 2000 }); // open == prev close
+    const signals = detectBullishEngulfing([prev, curr]);
     expect(signals).toHaveLength(0);
   });
 });

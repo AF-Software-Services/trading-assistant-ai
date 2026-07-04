@@ -15,7 +15,7 @@ export const PHASE1_PAIRS: CurrencyPair[] = [
   "AUD/USD",
 ];
 
-export type Timeframe = "1H" | "4H" | "D" | "W";
+export type Timeframe = "1H" | "2H" | "4H" | "D" | "W";
 
 export interface Candle {
   timestamp: number; // unix ms

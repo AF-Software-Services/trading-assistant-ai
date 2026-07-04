@@ -33,6 +33,7 @@ export interface AnalysisResult {
   pair: string
   trend: string
   zones: Zone[]
+  htfZones?: Zone[]
   structure: {
     trend: string
     swingPoints: SwingPoint[]
@@ -81,15 +82,29 @@ export async function getCandles(
   const res = await fetch(
     `${BASE}/api/v1/candles/${encodedPair}?timeframe=${timeframe}&count=${count}`
   )
-  if (!res.ok) throw new Error(`Candles fetch failed: ${res.status}`)
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string }
+    throw new Error(body.error ?? `Candles fetch failed: ${res.status}`)
+  }
   const data = await res.json() as { candles: CandleData[] }
   return data.candles
 }
 
-export async function getAnalysis(pair: string): Promise<AnalysisResult> {
+export async function getAnalysis(
+  pair: string,
+  timeframe = '4H',
+  opts?: { accountBalance?: number; riskPercent?: number; rewardRisk?: number }
+): Promise<AnalysisResult> {
   const encodedPair = encodeURIComponent(pair)
-  const res = await fetch(`${BASE}/api/v1/analysis/${encodedPair}`)
-  if (!res.ok) throw new Error(`Analysis fetch failed: ${res.status}`)
+  const params = new URLSearchParams({ timeframe })
+  if (opts?.accountBalance) params.set('accountBalance', String(opts.accountBalance))
+  if (opts?.riskPercent)    params.set('riskPercent',    String(opts.riskPercent))
+  if (opts?.rewardRisk)     params.set('rewardRisk',     String(opts.rewardRisk))
+  const res = await fetch(`${BASE}/api/v1/analysis/${encodedPair}?${params}`)
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string }
+    throw new Error(body.error ?? `Analysis fetch failed: ${res.status}`)
+  }
   return res.json() as Promise<AnalysisResult>
 }
 

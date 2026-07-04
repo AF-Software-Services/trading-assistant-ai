@@ -89,13 +89,15 @@ export const tradeRectOverlay: OverlayTemplate = {
 
 /**
  * Draggable horizontal price line with off-screen edge indicator.
- * Single point: [{ value: price }]
+ * Single point: [{ timestamp, value: price }]
  * extendData: { color: string; label: string; info?: string }
+ *
+ * The entire line is the drag target — click and drag anywhere on it.
  */
 export const hLineOverlay: OverlayTemplate = {
   name: 'hLine',
   totalStep: 1,
-  needDefaultPointFigure: true,
+  needDefaultPointFigure: false,
   needDefaultXAxisFigure: false,
   needDefaultYAxisFigure: false,
   createPointFigures ({ overlay, coordinates, bounding }) {
@@ -114,6 +116,7 @@ export const hLineOverlay: OverlayTemplate = {
     const isAbove     = y < chartTop
     const isBelow     = y > chartBottom
 
+    // Off-screen indicator
     if (isAbove || isBelow) {
       const ey    = isAbove ? chartTop + 14 : chartBottom - 14
       const arrow = isAbove ? '▲' : '▼'
@@ -123,6 +126,7 @@ export const hLineOverlay: OverlayTemplate = {
           type: 'rect',
           attrs: { x: 4, y: ey - 9, width: txt.length * 7 + 8, height: 18 },
           styles: { style: 'fill', color: '#0d1117', borderColor: color, borderSize: 1, borderStyle: 'solid' },
+          ignoreEvent: false,
         },
         {
           type: 'text',
@@ -134,15 +138,36 @@ export const hLineOverlay: OverlayTemplate = {
 
     const labelText = `${label} ${price.toFixed(dec)}${info ? '  ' + info : ''}`
     return [
+      // Invisible wide hit-area rect so the whole line is draggable
+      {
+        type: 'rect',
+        attrs: { x: 0, y: y - 5, width: 99999, height: 10 },
+        styles: { style: 'fill', color: 'transparent' },
+        ignoreEvent: false,
+      },
+      // The visible line
       {
         type: 'line',
         attrs: { coordinates: [{ x: 0, y }, { x: 99999, y }] },
-        styles: { style: 'solid', color, size: 1 },
+        styles: { style: 'dashed', color, size: 1, dashedValue: [6, 3] },
       },
+      // Label on the left
       {
         type: 'text',
         attrs: { x: 8, y: y + 2, text: labelText, align: 'left', baseline: 'top' },
         styles: { style: 'fill', color, size: 10, family: 'monospace', weight: '600' },
+      },
+      // Drag handle — visible grip on the right side
+      {
+        type: 'rect',
+        attrs: { x: (b['width'] ?? 800) - 54, y: y - 9, width: 50, height: 18 },
+        styles: { style: 'fill', color: color + '33', borderColor: color, borderSize: 1, borderStyle: 'solid' },
+        ignoreEvent: false,
+      },
+      {
+        type: 'text',
+        attrs: { x: (b['width'] ?? 800) - 29, y: y - 7, text: '⠿ drag', align: 'center', baseline: 'top' },
+        styles: { style: 'fill', color, size: 9, family: 'monospace', weight: '700' },
       },
     ]
   },

@@ -57,7 +57,7 @@ export async function handleCronTrigger(
 ): Promise<void> {
   const start       = Date.now();
   const sessionName = resolveSessionName(event.cron);
-  const provider    = createMarketDataProvider({ provider: env.MARKET_DATA_PROVIDER });
+  const provider    = createMarketDataProvider({ provider: env.MARKET_DATA_PROVIDER, kv: env.KV });
 
   console.log(`[Cron] Session: ${sessionName} | Cron: ${event.cron} | Start: ${new Date(start).toISOString()}`);
 

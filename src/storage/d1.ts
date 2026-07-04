@@ -101,6 +101,8 @@ function rowToRecommendation(row: Record<string, unknown>): Recommendation {
     id:              row["id"] as string,
     pair:            row["pair"] as Recommendation["pair"],
     direction:       row["direction"] as Recommendation["direction"],
+    tradeClass:      (row["trade_class"] as Recommendation["tradeClass"]) ?? "PRO_TREND",
+    mtfLabel:        (row["mtf_label"] as string) ?? "",
     confidence:      row["confidence"] as number,
     scoreBreakdown:  parse(row["score_breakdown_json"]),
     setupType:       row["setup_type"] as string,

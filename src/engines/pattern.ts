@@ -18,13 +18,18 @@ interface SwingLow {
   timestamp: number;
 }
 
+// Uses 2-bar lookahead/lookback so noisy candles don't break swing detection
 function getSwingHighs(candles: Candle[]): SwingHigh[] {
   const highs: SwingHigh[] = [];
-  const slice = candles.slice(-100);
+  const slice = candles.slice(-120);
   const offset = candles.length - slice.length;
-  for (let i = 1; i < slice.length - 1; i++) {
-    if (slice[i]!.high > slice[i - 1]!.high && slice[i]!.high > slice[i + 1]!.high) {
-      highs.push({ index: offset + i, price: slice[i]!.high, timestamp: slice[i]!.timestamp });
+  for (let i = 2; i < slice.length - 2; i++) {
+    const h = slice[i]!.high;
+    if (
+      h > slice[i - 1]!.high && h > slice[i - 2]!.high &&
+      h > slice[i + 1]!.high && h > slice[i + 2]!.high
+    ) {
+      highs.push({ index: offset + i, price: h, timestamp: slice[i]!.timestamp });
     }
   }
   return highs;
@@ -32,11 +37,15 @@ function getSwingHighs(candles: Candle[]): SwingHigh[] {
 
 function getSwingLows(candles: Candle[]): SwingLow[] {
   const lows: SwingLow[] = [];
-  const slice = candles.slice(-100);
+  const slice = candles.slice(-120);
   const offset = candles.length - slice.length;
-  for (let i = 1; i < slice.length - 1; i++) {
-    if (slice[i]!.low < slice[i - 1]!.low && slice[i]!.low < slice[i + 1]!.low) {
-      lows.push({ index: offset + i, price: slice[i]!.low, timestamp: slice[i]!.timestamp });
+  for (let i = 2; i < slice.length - 2; i++) {
+    const l = slice[i]!.low;
+    if (
+      l < slice[i - 1]!.low && l < slice[i - 2]!.low &&
+      l < slice[i + 1]!.low && l < slice[i + 2]!.low
+    ) {
+      lows.push({ index: offset + i, price: l, timestamp: slice[i]!.timestamp });
     }
   }
   return lows;
@@ -68,14 +77,14 @@ function localMaxBetween(candles: Candle[], fromIdx: number, toIdx: number): { p
   return { price: max, timestamp: ts };
 }
 
-export function detectHeadAndShoulders(candles: Candle[]): ChartPattern | null {
+export function detectHeadAndShoulders(candles: Candle[], pair = "EUR/USD", timeframe = "4H"): ChartPattern | null {
   if (candles.length < 20) return null;
   const atr = simpleATR(candles);
   const highs = getSwingHighs(candles);
   if (highs.length < 3) return null;
 
-  // Right shoulder must be within the last 30 candles to be actionable
-  const recentThreshold = candles.length - 30;
+  // Right shoulder must be within the last 50 candles to be actionable
+  const recentThreshold = candles.length - 50;
   let best: ChartPattern | null = null;
 
   for (let i = 0; i < highs.length - 2; i++) {
@@ -105,8 +114,8 @@ export function detectHeadAndShoulders(candles: Candle[]): ChartPattern | null {
     const confidence = Math.round(50 + symmetryScore + (status === "confirmed" ? 20 : 0));
 
     const pattern: ChartPattern = {
-      pair: "EUR/USD" as any,
-      timeframe: "4H" as any,
+      pair: pair as any,
+      timeframe: timeframe as any,
       type: "head_and_shoulders",
       status,
       neckline: necklinePrice,
@@ -134,13 +143,13 @@ export function detectHeadAndShoulders(candles: Candle[]): ChartPattern | null {
   return best;
 }
 
-export function detectInverseHeadAndShoulders(candles: Candle[]): ChartPattern | null {
+export function detectInverseHeadAndShoulders(candles: Candle[], pair = "EUR/USD", timeframe = "4H"): ChartPattern | null {
   if (candles.length < 20) return null;
   const atr = simpleATR(candles);
   const lows = getSwingLows(candles);
   if (lows.length < 3) return null;
 
-  const recentThreshold = candles.length - 30;
+  const recentThreshold = candles.length - 50;
   let best: ChartPattern | null = null;
 
   for (let i = 0; i < lows.length - 2; i++) {
@@ -170,8 +179,8 @@ export function detectInverseHeadAndShoulders(candles: Candle[]): ChartPattern |
     const confidence = Math.round(50 + symmetryScore + (status === "confirmed" ? 20 : 0));
 
     const pattern: ChartPattern = {
-      pair: "EUR/USD" as any,
-      timeframe: "4H" as any,
+      pair: pair as any,
+      timeframe: timeframe as any,
       type: "inverse_head_and_shoulders",
       status,
       neckline: necklinePrice,
@@ -207,10 +216,10 @@ export function detectDoubleBottom(_candles: Candle[]): ChartPattern | null {
   return null;
 }
 
-export function detectAllPatterns(candles: Candle[]): ChartPattern[] {
+export function detectAllPatterns(candles: Candle[], pair = "EUR/USD", timeframe = "4H"): ChartPattern[] {
   return [
-    detectHeadAndShoulders(candles),
-    detectInverseHeadAndShoulders(candles),
+    detectHeadAndShoulders(candles, pair, timeframe),
+    detectInverseHeadAndShoulders(candles, pair, timeframe),
     detectDoubleTop(candles),
     detectDoubleBottom(candles),
   ].filter((p): p is ChartPattern => p !== null);

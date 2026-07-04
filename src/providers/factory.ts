@@ -5,8 +5,10 @@ import { TwelveDataProvider } from "./twelvedata.ts";
 export function createMarketDataProvider(config: {
   provider: string;
   apiKey?: string;
+  kv?: KVNamespace;
 }): MarketDataProvider {
-  if (config.apiKey) {
+  if (config.provider === "live" || config.apiKey) {
+    if (!config.apiKey) throw new Error("TWELVE_DATA_API_KEY is required for live provider");
     return new TwelveDataProvider(config.apiKey);
   }
 
@@ -14,8 +16,6 @@ export function createMarketDataProvider(config: {
     case "mock":
       return new MockMarketDataProvider();
     default:
-      throw new Error(
-        `Unknown market data provider: "${config.provider}". Valid options: "mock".`
-      );
+      throw new Error(`Unknown market data provider: "${config.provider}". Valid options: "mock", "live".`);
   }
 }
