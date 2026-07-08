@@ -21,6 +21,7 @@ import {
   executeSignal,
   runBotScan,
 } from "../bot/engine.ts";
+import { TradingService } from "../trading/service.ts";
 
 // Re-export Env shape expected by tools
 export interface Env {
@@ -518,17 +519,17 @@ export function registerTools(server: McpServer, env: Env): void {
         return text(`Signal ${signalId} has expired — run a new scan to get fresh setups.`);
       }
 
-      const token = await env.KV.get("ctrader:access_token");
-      if (!token) return text("cTrader is not connected. Go to the trading app and connect first.");
+      let trading: TradingService;
+      try {
+        trading = await TradingService.connect(env);
+      } catch {
+        return text("cTrader is not connected. Go to the trading app and connect first.");
+      }
 
       await updateBotSignalStatus(env.DB, signal.id, "approved");
 
       try {
-        await executeSignal(
-          signal, env.DB, env.KV, token,
-          env.CTRADER_CLIENT_ID, env.CTRADER_CLIENT_SECRET,
-          parseInt(env.CTRADER_ACCOUNT_ID)
-        );
+        await executeSignal(signal, env.DB, env.KV, trading);
 
         const pipFactor = signal.pair.includes("JPY") ? 100 : 10000;
         const stopPips  = Math.abs(signal.entryPrice - signal.stopLoss) * pipFactor;

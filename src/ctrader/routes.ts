@@ -1,8 +1,9 @@
-import { Hono } from 'hono';
-import { CTraderClient, SYMBOL_IDS, diagnoseCTrader } from './client.ts';
+import { Hono }          from 'hono';
+import { diagnoseCTrader } from './client.ts';
+import { TradingService }  from '../trading/service.ts';
 
 interface Env {
-  KV: KVNamespace;
+  KV:                    KVNamespace;
   CTRADER_CLIENT_ID:     string;
   CTRADER_CLIENT_SECRET: string;
   CTRADER_ACCOUNT_ID:    string;
@@ -11,15 +12,6 @@ interface Env {
 const REDIRECT_URI = 'https://trading-assistant-ai.andrew-dobson.workers.dev/auth/callback';
 const AUTH_URL     = 'https://connect.spotware.com/apps/auth';
 const TOKEN_URL    = 'https://connect.spotware.com/apps/token';
-
-function client(env: Env, token: string): CTraderClient {
-  return new CTraderClient({
-    clientId:     env.CTRADER_CLIENT_ID,
-    clientSecret: env.CTRADER_CLIENT_SECRET,
-    accessToken:  token,
-    accountId:    parseInt(env.CTRADER_ACCOUNT_ID),
-  });
-}
 
 export function createCTraderRouter() {
   const app = new Hono<{ Bindings: Env }>();
@@ -90,46 +82,36 @@ export function createCTraderRouter() {
 
   // ── Open positions ────────────────────────────────────────────────────────────
   app.get('/api/v1/ctrader/positions', async (c) => {
-    const token = await c.env.KV.get('ctrader:access_token');
-    if (!token) return c.json({ error: 'Not connected to cTrader' }, 401);
     try {
-      const positions = await client(c.env, token).getPositions();
+      const svc       = await TradingService.connect(c.env);
+      const positions = await svc.getPositions();
       return c.json({ positions, count: positions.length });
     } catch (e) {
-      return c.json({ error: (e as Error).message }, 502);
+      const msg = (e as Error).message;
+      return msg.includes('Not connected')
+        ? c.json({ error: msg }, 401)
+        : c.json({ error: msg }, 502);
     }
   });
 
   // ── Close position ────────────────────────────────────────────────────────────
   app.post('/api/v1/ctrader/positions/:id/close', async (c) => {
-    const token = await c.env.KV.get('ctrader:access_token');
-    if (!token) return c.json({ error: 'Not connected to cTrader' }, 401);
-
     const positionId = parseInt(c.req.param('id'));
-    const body = await c.req.json<{ volume?: number }>().catch(() => ({}));
-
+    const body       = await c.req.json<{ volume?: number }>().catch(() => ({}));
     try {
-      const ct = client(c.env, token);
-      // Get volume from open positions if not supplied
-      let volume = body.volume;
-      if (!volume) {
-        const positions = await ct.getPositions();
-        const pos = positions.find(p => p.positionId === positionId);
-        if (!pos) return c.json({ error: 'Position not found' }, 404);
-        volume = pos.volume;
-      }
-      await ct.closePosition(positionId, volume);
+      const svc = await TradingService.connect(c.env);
+      await svc.closePosition(positionId, body.volume);
       return c.json({ success: true, positionId });
     } catch (e) {
-      return c.json({ error: (e as Error).message }, 502);
+      const msg = (e as Error).message;
+      if (msg.includes('Not connected')) return c.json({ error: msg }, 401);
+      if (msg.includes('not found'))     return c.json({ error: msg }, 404);
+      return c.json({ error: msg }, 502);
     }
   });
 
   // ── Place order ───────────────────────────────────────────────────────────────
   app.post('/api/v1/ctrader/orders', async (c) => {
-    const token = await c.env.KV.get('ctrader:access_token');
-    if (!token) return c.json({ error: 'Not connected to cTrader' }, 401);
-
     const body = await c.req.json<{
       pair:        string;
       direction:   'buy' | 'sell';
@@ -140,12 +122,10 @@ export function createCTraderRouter() {
       takeProfit?: number;
     }>();
 
-    const symbolId = SYMBOL_IDS[body.pair];
-    if (!symbolId) return c.json({ error: `Unknown pair: ${body.pair}` }, 400);
-
     try {
-      await client(c.env, token).placeOrder({
-        symbolId,
+      const svc = await TradingService.connect(c.env);
+      await svc.placeOrder({
+        pair:       body.pair,
         direction:  body.direction,
         lots:       body.lots,
         limitPrice: body.orderType === 'limit' ? body.limitPrice : undefined,
@@ -154,24 +134,27 @@ export function createCTraderRouter() {
       });
       return c.json({ success: true });
     } catch (e) {
-      return c.json({ error: (e as Error).message }, 502);
+      const msg = (e as Error).message;
+      if (msg.includes('Not connected')) return c.json({ error: msg }, 401);
+      if (msg.includes('Unknown pair'))  return c.json({ error: msg }, 400);
+      return c.json({ error: msg }, 502);
     }
   });
 
   // ── Trade history ─────────────────────────────────────────────────────────────
   app.get('/api/v1/ctrader/history', async (c) => {
-    const token = await c.env.KV.get('ctrader:access_token');
-    if (!token) return c.json({ error: 'Not connected to cTrader' }, 401);
-
     const days = parseInt(c.req.query('days') ?? '30');
     const to   = Date.now();
     const from = to - days * 24 * 60 * 60 * 1000;
-
     try {
-      const deals = await client(c.env, token).getHistory(from, to);
+      const svc   = await TradingService.connect(c.env);
+      const deals = await svc.getHistory(from, to);
       return c.json({ deals, count: deals.length });
     } catch (e) {
-      return c.json({ error: (e as Error).message }, 502);
+      const msg = (e as Error).message;
+      return msg.includes('Not connected')
+        ? c.json({ error: msg }, 401)
+        : c.json({ error: msg }, 502);
     }
   });
 

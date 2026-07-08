@@ -6,7 +6,7 @@
  *    Safety Line slope + anchor are stored at execution time by storeTrendlineTrailState.
  */
 
-import { CTraderClient, SYMBOL_IDS }      from "../ctrader/client.ts";
+import { TradingService }                  from "../trading/service.ts";
 import { getBotSignals, updateBotSignalStatus, recordBotSignalOutcome } from "./engine.ts";
 import { updateJournalOutcome }            from "../storage/journal.ts";
 import { createMarketDataProvider }        from "../providers/factory.ts";
@@ -40,15 +40,8 @@ function pipFactor(pair: string): number {
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 
 export async function monitorPositions(env: Env): Promise<void> {
-  const token = await env.KV.get("ctrader:access_token");
-  if (!token) return;
-
-  const ct = new CTraderClient({
-    clientId:     env.CTRADER_CLIENT_ID,
-    clientSecret: env.CTRADER_CLIENT_SECRET,
-    accessToken:  token,
-    accountId:    parseInt(env.CTRADER_ACCOUNT_ID),
-  });
+  const trading = await TradingService.tryConnect(env);
+  if (!trading) return;
 
   const executedSignals = await getBotSignals(env.DB, { status: "executed", limit: 20 });
   const openSignals     = executedSignals.filter(s => s.ctraderPositionId !== null);
@@ -56,7 +49,7 @@ export async function monitorPositions(env: Env): Promise<void> {
 
   let openPositions;
   try {
-    openPositions = await ct.getPositions();
+    openPositions = await trading.getPositions();
   } catch (e) {
     console.error("[Monitor] Failed to fetch positions:", e);
     return;
@@ -78,7 +71,7 @@ export async function monitorPositions(env: Env): Promise<void> {
       const to   = Date.now();
       const from = signal.executedAt ?? (to - 7 * 24 * 60 * 60 * 1000);
       try {
-        const deals      = await ct.getHistory(from, to);
+        const deals      = await trading.getHistory(from, to);
         const closingDeal = deals.find(d => d.symbol === signal.pair);
 
         if (closingDeal?.closePrice) {
@@ -137,12 +130,9 @@ export async function monitorPositions(env: Env): Promise<void> {
         : newSL < state.currentSL - atr * 0.1;
 
       if (slImproved) {
-        const symbolId = SYMBOL_IDS[signal.pair];
-        if (symbolId) {
-          await ct.amendPosition(posId, newSL, signal.takeProfit ?? undefined);
-          state.currentSL = newSL;
-          console.log(`[Monitor] Trail ${signal.pair} ${signal.direction}: SL → ${newSL.toFixed(5)}`);
-        }
+        await trading.amendPosition(posId, newSL, signal.takeProfit ?? undefined);
+        state.currentSL = newSL;
+        console.log(`[Monitor] Trail ${signal.pair} ${signal.direction}: SL → ${newSL.toFixed(5)}`);
       }
 
       await env.KV.put(trailKey(signal.id), JSON.stringify(state), { expirationTtl: 7 * 24 * 3600 });

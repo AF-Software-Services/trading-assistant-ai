@@ -4,7 +4,7 @@ import type { BotInstance }                from "./bot-types.ts";
 import { createMarketDataProvider }        from "../providers/factory.ts";
 import { detectTrendlineSignal }           from "../engines/trendline.ts";
 import { storeTrendlineTrailState }        from "./monitor.ts";
-import { CTraderClient, SYMBOL_IDS }       from "../ctrader/client.ts";
+import { TradingService }                   from "../trading/service.ts";
 import { createJournalEntry, buildFeaturesFromContext } from "../storage/journal.ts";
 
 export interface BotSettings {
@@ -304,21 +304,13 @@ function rowToSignal(row: Record<string, unknown>): BotSignal {
 // ── Execute a signal via cTrader ──────────────────────────────────────────────
 
 export async function executeSignal(
-  signal: BotSignal,
-  db: D1Database,
-  kv: KVNamespace,
-  token: string,
-  clientId: string,
-  clientSecret: string,
-  accountId: number
+  signal:  BotSignal,
+  db:      D1Database,
+  kv:      KVNamespace,
+  trading: TradingService,
 ): Promise<void> {
-  const symbolId = SYMBOL_IDS[signal.pair];
-  if (!symbolId) throw new Error(`Unknown symbol: ${signal.pair}`);
-
-  const ct = new CTraderClient({ clientId, clientSecret, accessToken: token, accountId });
-
-  const { orderId } = await ct.placeOrder({
-    symbolId,
+  const { orderId } = await trading.placeOrder({
+    pair:       signal.pair,
     direction:  signal.direction,
     lots:       signal.lots,
     limitPrice: signal.entryPrice,
@@ -433,23 +425,15 @@ export async function runBotScan(env: {
   const riskAmount     = accountBalance * riskPercent / 100;
 
   // cTrader connection — required for autonomous, optional for approval
-  const token = await env.KV.get("ctrader:access_token");
+  const trading = await TradingService.tryConnect(env);
   let openPositionPairs: Set<string> = new Set();
   let openCount = 0;
-  let ctraderAvailable = false;
 
-  if (token) {
+  if (trading) {
     try {
-      const ct = new CTraderClient({
-        clientId:     env.CTRADER_CLIENT_ID,
-        clientSecret: env.CTRADER_CLIENT_SECRET,
-        accessToken:  token,
-        accountId:    parseInt(env.CTRADER_ACCOUNT_ID),
-      });
-      const positions = await ct.getPositions();
+      const positions = await trading.getPositions();
       openCount = positions.length;
       openPositionPairs = new Set(positions.map(p => p.symbol));
-      ctraderAvailable = true;
     } catch (e) {
       if (mode === "autonomous") {
         result.errors.push(`cTrader unavailable: ${(e as Error).message}`);
@@ -464,25 +448,17 @@ export async function runBotScan(env: {
   }
 
   // Cancel and expire old pending signals that had limit orders placed
-  if (token) {
+  if (trading) {
     const expiring = await env.DB.prepare(
       `SELECT id, ctrader_position_id FROM bot_signals
        WHERE status = 'executed' AND expires_at < ? AND ctrader_position_id IS NOT NULL`
     ).bind(Date.now()).all<{ id: string; ctrader_position_id: number }>();
 
-    if (expiring.results.length > 0) {
-      const ct = new CTraderClient({
-        clientId:     env.CTRADER_CLIENT_ID,
-        clientSecret: env.CTRADER_CLIENT_SECRET,
-        accessToken:  token,
-        accountId:    parseInt(env.CTRADER_ACCOUNT_ID),
-      });
-      for (const row of expiring.results) {
-        try {
-          await ct.cancelOrder(row.ctrader_position_id);
-        } catch { /* order may already be filled or gone */ }
-        await updateBotSignalStatus(env.DB, row.id, "expired");
-      }
+    for (const row of expiring.results) {
+      try {
+        await trading.cancelOrder(row.ctrader_position_id);
+      } catch { /* order may already be filled or gone */ }
+      await updateBotSignalStatus(env.DB, row.id, "expired");
     }
   }
 
@@ -613,13 +589,9 @@ export async function runBotScan(env: {
           result.signalsQueued++;
         } else {
           try {
-            if (!token) throw new Error("No cTrader token");
+            if (!trading) throw new Error("No cTrader token");
             await saveBotSignal(env.DB, signal);
-            await executeSignal(
-              signal, env.DB, env.KV, token,
-              env.CTRADER_CLIENT_ID, env.CTRADER_CLIENT_SECRET,
-              parseInt(env.CTRADER_ACCOUNT_ID)
-            );
+            await executeSignal(signal, env.DB, env.KV, trading);
             // Store safety line so monitor can project it forward each tick
             await storeTrendlineTrailState(env.KV, signal.id, tlSig.safetyLine, Date.now(), signal.stopLoss);
             openCount++;

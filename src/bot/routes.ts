@@ -5,6 +5,7 @@ import {
   executeSignal,
   runBotScan,
 } from "./engine.ts";
+import { TradingService } from "../trading/service.ts";
 import {
   listBots,
   getBot,
@@ -142,9 +143,13 @@ export function createBotRouter() {
 
   // ── POST /api/v1/bot/signals/:id/approve ─────────────────────────────────────
   app.post("/signals/:id/approve", async (c) => {
-    const id    = c.req.param("id");
-    const token = await c.env.KV.get("ctrader:access_token");
-    if (!token) return c.json({ error: "cTrader not connected" }, 401);
+    const id = c.req.param("id");
+    let trading: import("../trading/service.ts").TradingService;
+    try {
+      trading = await TradingService.connect(c.env);
+    } catch {
+      return c.json({ error: "cTrader not connected" }, 401);
+    }
 
     const rows = await c.env.DB.prepare(
       "SELECT * FROM bot_signals WHERE id = ?"
@@ -180,11 +185,7 @@ export function createBotRouter() {
     await updateBotSignalStatus(c.env.DB, id, "approved");
 
     try {
-      await executeSignal(
-        signalObj, c.env.DB, c.env.KV, token,
-        c.env.CTRADER_CLIENT_ID, c.env.CTRADER_CLIENT_SECRET,
-        parseInt(c.env.CTRADER_ACCOUNT_ID)
-      );
+      await executeSignal(signalObj, c.env.DB, c.env.KV, trading);
       return c.json({ success: true, id });
     } catch (e) {
       await updateBotSignalStatus(c.env.DB, id, "failed", {
