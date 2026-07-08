@@ -60,7 +60,7 @@
             <span class="overlay-name">H&amp;S Patterns</span>
             <button class="toggle-btn active" id="toggle-patterns" data-overlay="patterns">ON</button>
           </div>
-          <div class="overlay-row">
+<div class="overlay-row">
             <span class="overlay-name">Trade Position</span>
             <button class="toggle-btn" id="toggle-trade" data-overlay="trade">OFF</button>
           </div>
@@ -96,7 +96,7 @@
         <div id="analysis-loading" class="loading hidden">Loading…</div>
       </div>
 
-      <div id="trade-panel">
+      <div id="trade-panel" style="display:none">
         <div class="section-label">TRADE IDEA</div>
         <div class="direction-toggle">
           <button class="dir-btn active" id="dir-buy">▲ BUY / LONG</button>
@@ -144,45 +144,37 @@
         <div id="save-status" class="hidden"></div>
       </div>
 
-      <div id="news-panel">
-        <div class="section-label news-label">
-          NEWS
-          <span id="news-sentiment-badge" class="news-badge hidden"></span>
-          <button id="news-refresh-btn" class="news-refresh" title="Refresh news">↻</button>
-        </div>
-        <div id="news-loading" class="news-status hidden">Loading…</div>
-        <div id="news-error" class="news-status error hidden"></div>
-        <div id="news-empty" class="news-status hidden">No relevant headlines found.</div>
-        <div id="news-list"></div>
-      </div>
-
-      <div id="ctrader-panel">
-        <div class="section-label">CTRADER</div>
-        <div id="ctrader-status-row">
-          <span id="ctrader-status-dot" class="status-dot disconnected"></span>
-          <span id="ctrader-status-text">Not connected</span>
-        </div>
-        <button id="ctrader-connect-btn">Connect cTrader</button>
-      </div>
     </aside>
+
+    <!-- Mobile overlay (dims sidebar drawer) -->
+    <div id="sidebar-overlay"></div>
 
     <!-- Main content area -->
     <main id="main-content">
+
+      <!-- Mobile-only top bar -->
+      <div id="mobile-topbar">
+        <button id="mobile-menu-btn" aria-label="Menu">☰</button>
+        <span id="mobile-pair-display">EUR/USD</span>
+        <div id="mobile-tf-buttons">
+          <button class="mobile-tf-btn" data-tf="1H">1H</button>
+          <button class="mobile-tf-btn" data-tf="2H">2H</button>
+          <button class="mobile-tf-btn active" data-tf="4H">4H</button>
+          <button class="mobile-tf-btn" data-tf="D">D</button>
+          <button class="mobile-tf-btn" data-tf="W">W</button>
+        </div>
+      </div>
 
       <!-- Top bar: tabs + drawing toolbar -->
       <div id="tab-bar">
         <button class="tab-btn active" data-tab="chart">Chart</button>
         <button class="tab-btn" data-tab="positions">Positions</button>
         <button class="tab-btn" data-tab="history">History</button>
-
-        <div class="tab-bar-separator"></div>
-
-        <button class="draw-tool-btn" id="draw-support" title="Click chart to place support line">— Support</button>
-        <button class="draw-tool-btn" id="draw-resistance" title="Click chart to place resistance line">— Resistance</button>
-        <button class="draw-tool-btn long-tool" id="draw-long" title="Place long trade setup">▲ Long</button>
-        <button class="draw-tool-btn short-tool" id="draw-short" title="Place short trade setup">▼ Short</button>
-        <button class="draw-tool-btn clear-tool" id="draw-clear" title="Clear all drawings">✕ Clear</button>
-        <span id="draw-hint" class="draw-hint-inline hidden">Click chart to place — ESC to cancel</span>
+        <button class="tab-btn" data-tab="journal">Journal</button>
+        <button class="tab-btn" data-tab="news">News</button>
+        <button class="tab-btn" data-tab="ctrader">cTrader</button>
+        <button class="tab-btn" data-tab="bot">Bot</button>
+        <button class="tab-btn" data-tab="backtest">Backtest</button>
 
         <div class="tab-bar-separator"></div>
 
@@ -194,17 +186,9 @@
               <label for="risk-balance">Account Balance (£)</label>
               <input type="number" id="risk-balance" min="100" max="1000000" step="100" value="10000" />
             </div>
-            <div class="risk-dropdown-row">
-              <label for="risk-percent">Risk per Trade (%)</label>
-              <input type="number" id="risk-percent" min="0.1" max="10" step="0.1" value="1" />
-            </div>
-            <div class="risk-dropdown-row">
-              <label for="risk-rr">Min R:R Ratio</label>
-              <input type="number" id="risk-rr" min="1" max="10" step="0.1" value="1.2" />
-            </div>
             <div class="risk-dropdown-divider"></div>
-            <div class="risk-dropdown-summary">
-              Max Risk: <strong id="risk-amount-display">£100.00</strong>
+            <div class="risk-dropdown-summary" style="font-size:11px;color:var(--muted)">
+              Risk % and R:R are set per bot in the Bot tab.
             </div>
           </div>
         </div>
@@ -250,6 +234,127 @@
         </div>
       </div>
 
+      <!-- Journal tab -->
+      <div id="tab-journal" class="tab-panel hidden">
+        <div class="data-panel">
+          <div class="data-panel-header">
+            <span>Trade Journal</span>
+            <div class="header-controls">
+              <button id="journal-log-btn" class="small-btn primary-btn">+ Log Trade</button>
+              <button id="journal-refresh-btn" class="small-btn">↻ Refresh</button>
+            </div>
+          </div>
+
+          <!-- Stats bar -->
+          <div id="journal-stats-bar" class="journal-stats-bar hidden">
+            <div class="jstat"><span class="jstat-val" id="jstat-trades">0</span><span class="jstat-lbl">Trades</span></div>
+            <div class="jstat"><span class="jstat-val" id="jstat-winrate">—</span><span class="jstat-lbl">Win Rate</span></div>
+            <div class="jstat"><span class="jstat-val" id="jstat-rr-target">—</span><span class="jstat-lbl">Avg R:R Target</span></div>
+            <div class="jstat"><span class="jstat-val" id="jstat-rr-achieved">—</span><span class="jstat-lbl">Avg R:R Achieved</span></div>
+            <div class="jstat"><span class="jstat-val" id="jstat-pnl">—</span><span class="jstat-lbl">Total Pips</span></div>
+          </div>
+
+          <div id="journal-loading" class="panel-status hidden">Loading…</div>
+          <div id="journal-error"   class="panel-status error hidden"></div>
+          <div id="journal-empty"   class="panel-status hidden">No trades logged yet. Use the MCP <code>log_trade</code> tool or click + Log Trade.</div>
+
+          <table id="journal-table" class="data-table hidden">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Pair</th>
+                <th>Dir</th>
+                <th>Entry</th>
+                <th>SL</th>
+                <th>TP</th>
+                <th>R:R</th>
+                <th>Session</th>
+                <th>Signal</th>
+                <th>Result</th>
+                <th>Pips</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="journal-body"></tbody>
+          </table>
+        </div>
+
+        <!-- Log trade form (hidden until + Log Trade clicked) -->
+        <div id="journal-form-wrap" class="hidden">
+          <div class="data-panel" style="margin-top:8px">
+            <div class="data-panel-header"><span>Log New Trade</span></div>
+            <div class="journal-form">
+              <div class="jform-row">
+                <label>Pair
+                  <select id="jf-pair">
+                    <option>EUR/USD</option><option>GBP/USD</option><option>GBP/CAD</option>
+                    <option>USD/JPY</option><option>EUR/GBP</option><option>AUD/USD</option>
+                  </select>
+                </label>
+                <label>Direction
+                  <select id="jf-dir"><option value="buy">Buy / Long</option><option value="sell">Sell / Short</option></select>
+                </label>
+                <label>Timeframe
+                  <select id="jf-tf"><option>4H</option><option>D</option><option>1H</option><option>W</option></select>
+                </label>
+              </div>
+              <div class="jform-row">
+                <label>Entry Price <input id="jf-entry" type="number" step="0.00001" placeholder="1.10000"></label>
+                <label>Stop Loss   <input id="jf-sl"    type="number" step="0.00001" placeholder="1.09500"></label>
+                <label>Take Profit <input id="jf-tp"    type="number" step="0.00001" placeholder="1.11000"></label>
+              </div>
+              <div class="jform-row">
+                <label>Confidence (0-100) <input id="jf-conf" type="number" min="0" max="100" placeholder="65"></label>
+                <label>Signal Type
+                  <select id="jf-signal">
+                    <option value="unknown">Unknown / Manual</option>
+                    <option value="morning_star">Morning Star</option>
+                    <option value="evening_star">Evening Star</option>
+                    <option value="hammer">Hammer</option>
+                    <option value="shooting_star">Shooting Star</option>
+                    <option value="bullish_engulfing">Bullish Engulfing</option>
+                    <option value="bearish_engulfing">Bearish Engulfing</option>
+                    <option value="pin_bar">Pin Bar</option>
+                    <option value="inside_bar">Inside Bar</option>
+                  </select>
+                </label>
+                <label>Notes <input id="jf-notes" type="text" placeholder="Optional notes"></label>
+              </div>
+              <div class="jform-actions">
+                <button id="jf-submit" class="small-btn primary-btn">Save Trade</button>
+                <button id="jf-cancel" class="small-btn">Cancel</button>
+                <span id="jf-status" class="jf-status"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Outcome modal -->
+        <div id="outcome-modal" class="outcome-modal hidden">
+          <div class="outcome-modal-inner">
+            <div class="outcome-modal-title">Record Outcome</div>
+            <input type="hidden" id="outcome-journal-id">
+            <div class="jform-row">
+              <label>Result
+                <select id="outcome-result">
+                  <option value="win">Win — Hit TP</option>
+                  <option value="loss">Loss — Hit SL</option>
+                  <option value="breakeven">Breakeven</option>
+                </select>
+              </label>
+              <label>Exit Price <input id="outcome-exit" type="number" step="0.00001"></label>
+            </div>
+            <div class="jform-row">
+              <label style="flex:1">Notes <input id="outcome-notes" type="text" placeholder="What happened?"></label>
+            </div>
+            <div class="jform-actions">
+              <button id="outcome-submit" class="small-btn primary-btn">Save Outcome</button>
+              <button id="outcome-cancel" class="small-btn">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- History tab -->
       <div id="tab-history" class="tab-panel hidden">
         <div class="data-panel">
@@ -281,6 +386,262 @@
             </thead>
             <tbody id="history-body"></tbody>
           </table>
+        </div>
+      </div>
+
+      <!-- News tab -->
+      <div id="tab-news" class="tab-panel hidden">
+        <div class="data-panel">
+          <div class="data-panel-header">
+            <span>Market News <span id="news-sentiment-badge" class="news-badge hidden"></span></span>
+            <button id="news-refresh-btn" class="small-btn">↻ Refresh</button>
+          </div>
+          <div id="news-loading" class="panel-status hidden">Loading…</div>
+          <div id="news-error"   class="panel-status error hidden"></div>
+          <div id="news-empty"   class="panel-status hidden">No relevant headlines found.</div>
+          <div id="news-list" class="news-tab-list"></div>
+        </div>
+      </div>
+
+      <!-- cTrader tab -->
+      <div id="tab-ctrader" class="tab-panel hidden">
+        <div class="data-panel">
+          <div class="data-panel-header">
+            <span>cTrader Connection</span>
+          </div>
+          <div class="ctrader-tab-body">
+            <div id="ctrader-status-row" class="ctrader-status-row">
+              <span id="ctrader-status-dot" class="status-dot disconnected"></span>
+              <span id="ctrader-status-text">Not connected</span>
+            </div>
+            <p class="ctrader-tab-hint">Connect your cTrader account to enable live trade execution from the chart and the bot.</p>
+            <button id="ctrader-connect-btn" class="ctrader-connect-large">Connect cTrader</button>
+            <button id="ctrader-disconnect-btn" class="ctrader-disconnect-btn hidden">Disconnect &amp; Reconnect</button>
+
+            <div id="ctrader-trade-form" class="ctrader-trade-form hidden">
+              <h3 class="trade-form-title">Place Manual Trade</h3>
+              <div class="trade-type-toggle">
+                <button id="trade-type-market" class="trade-type-btn trade-type-active">Market</button>
+                <button id="trade-type-limit"  class="trade-type-btn">Limit</button>
+              </div>
+              <div class="trade-direction-toggle">
+                <button id="trade-dir-buy"  class="trade-dir-btn trade-dir-active">▲ Buy</button>
+                <button id="trade-dir-sell" class="trade-dir-btn">▼ Sell</button>
+              </div>
+              <div class="trade-form-grid">
+                <label>Pair
+                  <select id="trade-pair">
+                    <option>EUR/USD</option><option>GBP/USD</option><option>USD/JPY</option>
+                    <option>AUD/USD</option><option>EUR/GBP</option><option>GBP/CAD</option>
+                  </select>
+                </label>
+                <label id="trade-entry-label">Limit Price
+                  <input id="trade-entry" type="number" step="0.00001" placeholder="limit price">
+                </label>
+                <label>Stop Loss
+                  <input id="trade-sl" type="number" step="0.00001" placeholder="auto from entry">
+                </label>
+                <label>Take Profit
+                  <input id="trade-tp" type="number" step="0.00001" placeholder="auto from R:R">
+                </label>
+              </div>
+              <div id="trade-sizing" class="trade-sizing hidden">
+                <span id="trade-sizing-lots"></span>
+                <span id="trade-sizing-risk"></span>
+                <span id="trade-sizing-rr"></span>
+              </div>
+              <div class="trade-form-actions">
+                <button id="trade-submit-btn" class="btn-trade">Place Trade</button>
+              </div>
+              <div id="trade-result" class="trade-result hidden"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="ctrader-positions-panel" class="data-panel hidden">
+          <div class="data-panel-header"><span>Open Positions</span>
+            <button id="ctrader-positions-refresh" class="small-btn">↻</button>
+          </div>
+          <div id="ctrader-positions-list" class="positions-list"></div>
+        </div>
+      </div>
+
+      <!-- Bot tab -->
+      <div id="tab-bot" class="tab-panel hidden">
+
+        <!-- Bot list -->
+        <div class="data-panel">
+          <div class="data-panel-header">
+            <span>Bots</span>
+            <div class="header-controls">
+              <button id="bot-scan-all-btn" class="small-btn">▶ Scan All</button>
+              <button id="bot-add-btn" class="small-btn primary-btn">+ Add Bot</button>
+            </div>
+          </div>
+          <div id="bot-scan-status" class="bot-scan-status hidden"></div>
+          <div id="bot-list">
+            <div class="bot-no-signals">Loading bots…</div>
+          </div>
+        </div>
+
+        <!-- Pending signals -->
+        <div class="data-panel" style="margin-top:12px">
+          <div class="data-panel-header">
+            <span>Pending Signals <span id="bot-pending-count" class="bot-pending-badge">0</span></span>
+          </div>
+          <div id="bot-signals-list">
+            <div class="bot-no-signals">No pending signals</div>
+          </div>
+        </div>
+
+        <!-- Cron log -->
+        <div class="data-panel" style="margin-top:12px">
+          <div class="data-panel-header">
+            <span>Cron Log</span>
+            <button id="cron-log-refresh" style="font-size:11px;padding:2px 8px">Refresh</button>
+          </div>
+          <div id="cron-log-list">
+            <div class="bot-no-signals">Loading…</div>
+          </div>
+        </div>
+
+        <!-- Add Bot modal -->
+        <div id="bot-add-modal" class="modal-overlay hidden">
+          <div class="modal-box">
+            <div class="modal-title">Add New Bot</div>
+            <div class="modal-field">
+              <label>Name</label>
+              <input type="text" id="bot-new-name" placeholder="e.g. Trendline Bot 2" />
+            </div>
+            <div class="modal-field">
+              <label>Type</label>
+              <div class="custom-select" id="bot-type-select">
+                <div class="custom-select-selected" data-value="trendline">Trendline Bot — trendline break + retest</div>
+                <div class="custom-select-options hidden">
+                  <div class="custom-select-option active" data-value="trendline">Trendline Bot — trendline break + retest</div>
+                </div>
+              </div>
+              <input type="hidden" id="bot-new-type" value="trendline" />
+            </div>
+            <div class="modal-field">
+              <label>Pairs (leave all unchecked = all pairs)</label>
+              <div class="modal-pair-checks">
+                <label><input type="checkbox" class="bot-new-pair" value="EUR/USD" /> EUR/USD</label>
+                <label><input type="checkbox" class="bot-new-pair" value="GBP/USD" /> GBP/USD</label>
+                <label><input type="checkbox" class="bot-new-pair" value="GBP/CAD" /> GBP/CAD</label>
+                <label><input type="checkbox" class="bot-new-pair" value="USD/JPY" /> USD/JPY</label>
+                <label><input type="checkbox" class="bot-new-pair" value="EUR/GBP" /> EUR/GBP</label>
+                <label><input type="checkbox" class="bot-new-pair" value="AUD/USD" /> AUD/USD</label>
+              </div>
+            </div>
+            <div class="modal-actions">
+              <button id="bot-add-cancel-btn" class="small-btn">Cancel</button>
+              <button id="bot-add-confirm-btn" class="small-btn primary-btn">Create Bot</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Backtest tab -->
+      <div id="tab-backtest" class="tab-panel hidden">
+        <div class="data-panel backtest-panel">
+
+          <!-- Config -->
+          <div class="data-panel-header">
+            <span>Backtest Configuration</span>
+          </div>
+          <div class="backtest-config">
+            <div class="bt-settings-note" id="bt-settings-note">
+              Uses your saved bot &amp; risk settings — change them in Risk Settings or Bot Settings.
+            </div>
+            <div class="backtest-config-row">
+              <label>From Date</label>
+              <input type="date" id="bt-from" />
+            </div>
+            <div class="backtest-config-row">
+              <label>To Date</label>
+              <input type="date" id="bt-to" />
+            </div>
+            <div class="backtest-config-row backtest-pairs-row">
+              <label>Pairs</label>
+              <div class="backtest-pairs-checks">
+                <label><input type="checkbox" class="bt-pair-check" value="EUR/USD" checked /> EUR/USD</label>
+                <label><input type="checkbox" class="bt-pair-check" value="GBP/USD" checked /> GBP/USD</label>
+                <label><input type="checkbox" class="bt-pair-check" value="GBP/CAD" checked /> GBP/CAD</label>
+                <label><input type="checkbox" class="bt-pair-check" value="USD/JPY" checked /> USD/JPY</label>
+                <label><input type="checkbox" class="bt-pair-check" value="EUR/GBP" checked /> EUR/GBP</label>
+                <label><input type="checkbox" class="bt-pair-check" value="AUD/USD" checked /> AUD/USD</label>
+              </div>
+            </div>
+            <div class="backtest-config-row">
+              <label>Bot</label>
+              <div class="custom-select" id="bt-bot-select">
+                <div class="custom-select-selected" data-value="">Loading bots…</div>
+                <div class="custom-select-options hidden"></div>
+              </div>
+              <input type="hidden" id="bt-bot-id" value="" />
+              <input type="hidden" id="bt-bot-type" value="structure" />
+            </div>
+            <div class="backtest-config-row">
+              <button id="bt-run-btn" class="bt-run-btn">▶ Run Backtest</button>
+            </div>
+          </div>
+
+          <!-- Progress -->
+          <div id="backtest-progress" class="backtest-progress hidden">
+            <div class="backtest-progress-status" id="bt-status-msg">Initialising…</div>
+          </div>
+
+          <!-- Results -->
+          <div id="backtest-results" class="hidden">
+            <div class="data-panel-header" style="margin-top:16px">
+              <span id="bt-results-title">Results</span>
+              <button id="bt-delete-btn" class="small-btn danger">✕ Delete Run</button>
+            </div>
+
+            <!-- Stats cards -->
+            <div class="backtest-stats" id="bt-stats"></div>
+            <div id="bt-diagnostics" class="hidden"></div>
+
+            <!-- Equity curve -->
+            <div class="backtest-equity">
+              <div class="section-label">EQUITY CURVE</div>
+              <div id="bt-equity-chart"></div>
+            </div>
+
+            <!-- Trade table -->
+            <div class="section-label" style="margin-top:16px">TRADES</div>
+            <div class="table-scroll">
+              <table class="data-table backtest-table">
+                <thead>
+                  <tr>
+                    <th>Pair</th>
+                    <th>Dir</th>
+                    <th>Entry</th>
+                    <th>SL</th>
+                    <th>TP</th>
+                    <th>Score</th>
+                    <th>Date</th>
+                    <th>Outcome</th>
+                    <th>P&amp;L pips</th>
+                    <th>P&amp;L £</th>
+                  </tr>
+                </thead>
+                <tbody id="bt-trades-body"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Past runs -->
+          <div id="backtest-runs-list" style="margin-top:24px">
+            <div class="data-panel-header">
+              <span>Past Runs</span>
+              <button id="bt-refresh-runs" class="small-btn">↻ Refresh</button>
+            </div>
+            <div id="bt-runs-body"></div>
+          </div>
+
         </div>
       </div>
 

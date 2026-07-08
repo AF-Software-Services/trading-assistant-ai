@@ -306,72 +306,102 @@ export interface AreaOfInterest {
 }
 
 /**
- * Identify an Area of Interest on the weekly chart.
+ * Identify an Area of Interest.
  *
- * A bullish AOI sits between the most recent Higher Low and Higher High on W.
- * A bearish AOI sits between the most recent Lower High and Lower Low on W.
- * At least 3 weekly S/R zones must cluster within that swing range for the
- * AOI to be considered valid — fewer zones means insufficient confluence.
+ * The market direction is defined by HH/HL (bullish) or LH/LL (bearish) on
+ * the weekly chart. The AOI sits AROUND the most recent HL (bullish) or LH
+ * (bearish) swing point — that is where price is expected to react.
+ *
+ * Validity requires 3+ S/R zones from ANY timeframe (W/D/4H) clustering
+ * near that swing point. Those zones define the AOI bounds.
+ *
+ * allZones should be pre-computed from W + D + 4H and marked broken.
  */
 export function detectAreaOfInterest(
   candlesW: Candle[],
-  atr: number,
-  minZones = 3,
+  allZones: SupportResistanceZone[],
+  _atr: number,
+  minConfluence = 2,
 ): AreaOfInterest | null {
   if (candlesW.length < 10) return null;
 
   const swings = detectSwingPoints(candlesW);
-  const zones  = detectZones(candlesW, "W", atr).filter(z => !z.isBroken);
+  if (swings.length < 4) return null;
 
-  if (swings.length < 4 || zones.length < minZones) return null;
+  // Collect all individual swing prices from W/D/4H as S/R levels.
+  // A trader counts every HL, LL as support and every HH, LH as resistance —
+  // not just price levels that have been visited twice (grouped zones).
+  const allSwingLevels = allZones.flatMap(z => [
+    { price: z.midpoint, type: z.type, timeframe: z.timeframe },
+  ]);
+  // Also add the raw swing points from the weekly candles directly
+  for (const sw of swings) {
+    const type = (sw.label === "HL" || sw.label === "LL") ? "support" : "resistance";
+    allSwingLevels.push({ price: sw.price, type, timeframe: "W" });
+  }
 
-  // Look for a bullish AOI: most recent HL followed by a HH
-  const bullish = (() => {
-    for (let i = swings.length - 1; i >= 1; i--) {
-      const curr = swings[i]!;
-      const prev = swings[i - 1]!;
-      if (curr.label === "HH" && prev.label === "HL") {
-        const floor   = prev.price;  // HL
-        const ceiling = curr.price;  // HH
-        const inside  = zones.filter(z => z.midpoint >= floor && z.midpoint <= ceiling);
-        if (inside.length >= minZones) {
-          const entryIdeal = inside.reduce((min, z) => z.low < min ? z.low : min, inside[0]!.low);
-          return {
-            bias: "bullish" as const,
-            low: floor, high: ceiling,
-            zones: inside,
-            swingLow: floor, swingHigh: ceiling,
-            entryIdeal,
-            description: `Bullish AOI between W-HL ${floor.toFixed(5)} and W-HH ${ceiling.toFixed(5)} — ${inside.length} weekly zones confluent. Ideal entry near ${entryIdeal.toFixed(5)}.`,
-          };
-        }
+  // Deduplicate levels within atr*0.5 of each other (same level, different TF)
+  function deduplicateLevels(
+    levels: Array<{ price: number; type: string; timeframe: string }>,
+    tolerance: number,
+  ) {
+    const out: typeof levels = [];
+    for (const l of levels) {
+      if (!out.some(o => o.type === l.type && Math.abs(o.price - l.price) < tolerance)) {
+        out.push(l);
       }
     }
-    return null;
-  })();
+    return out;
+  }
 
-  if (bullish) return bullish;
+  // Structure is defined by the LAST swing high and LAST swing low on the weekly.
+  // Last high = HH or LH. Last low = HL or LL.
+  // These two labels together tell us current structure and where the AOI anchors.
+  const lastHigh = swings.slice().reverse().find(s => s.label === "HH" || s.label === "LH");
+  const lastLow  = swings.slice().reverse().find(s => s.label === "HL" || s.label === "LL");
+  if (!lastHigh || !lastLow) return null;
 
-  // Look for a bearish AOI: most recent LH followed by a LL
-  for (let i = swings.length - 1; i >= 1; i--) {
-    const curr = swings[i]!;
-    const prev = swings[i - 1]!;
-    if (curr.label === "LL" && prev.label === "LH") {
-      const ceiling = prev.price;  // LH
-      const floor   = curr.price;  // LL
-      const inside  = zones.filter(z => z.midpoint >= floor && z.midpoint <= ceiling);
-      if (inside.length >= minZones) {
-        const entryIdeal = inside.reduce((max, z) => z.high > max ? z.high : max, inside[0]!.high);
-        return {
-          bias: "bearish" as const,
-          low: floor, high: ceiling,
-          zones: inside,
-          swingLow: floor, swingHigh: ceiling,
-          entryIdeal,
-          description: `Bearish AOI between W-LH ${ceiling.toFixed(5)} and W-LL ${floor.toFixed(5)} — ${inside.length} weekly zones confluent. Ideal entry near ${entryIdeal.toFixed(5)}.`,
-        };
-      }
-    }
+  const isBullish = lastLow.label === "HL";  // last low is a higher low → uptrend
+  const isBearish = lastHigh.label === "LH"; // last high is a lower high → downtrend
+
+  if (isBullish) {
+    // AOI anchors at the most recent HL — that's where we buy on a pullback.
+    // Dedup tolerance is 0.15 ATR (~12 pips on EUR/USD): distinct levels from different
+    // timeframes that are close but not identical should each count as a confluence.
+    const anchor = lastLow.price;
+    const levels = deduplicateLevels(
+      allSwingLevels.filter(l => l.type === "support" && Math.abs(l.price - anchor) <= _atr * 8),
+      _atr * 0.15,
+    );
+    if (levels.length < minConfluence) return null;
+    const prices  = levels.map(l => l.price);
+    const aoiLow  = Math.min(...prices) - _atr * 0.5;
+    const aoiHigh = Math.max(...prices) + _atr * 0.5;
+    return {
+      bias: "bullish", low: aoiLow, high: aoiHigh,
+      zones: allZones.filter(z => !z.isBroken && z.type === "support" && Math.abs(z.midpoint - anchor) <= _atr * 8),
+      swingLow: anchor, swingHigh: lastHigh.price, entryIdeal: aoiLow,
+      description: `Bullish AOI at W-HL ${anchor.toFixed(5)} (last low) — ${levels.length} S/R levels`,
+    };
+  }
+
+  if (isBearish) {
+    // AOI anchors at the most recent LH — that's where we sell on a pullback.
+    const anchor = lastHigh.price;
+    const levels = deduplicateLevels(
+      allSwingLevels.filter(l => l.type === "resistance" && Math.abs(l.price - anchor) <= _atr * 8),
+      _atr * 0.15,
+    );
+    if (levels.length < minConfluence) return null;
+    const prices  = levels.map(l => l.price);
+    const aoiLow  = Math.min(...prices) - _atr * 0.5;
+    const aoiHigh = Math.max(...prices) + _atr * 0.5;
+    return {
+      bias: "bearish", low: aoiLow, high: aoiHigh,
+      zones: allZones.filter(z => !z.isBroken && z.type === "resistance" && Math.abs(z.midpoint - anchor) <= _atr * 8),
+      swingLow: lastLow.price, swingHigh: anchor, entryIdeal: aoiHigh,
+      description: `Bearish AOI at W-LH ${anchor.toFixed(5)} (last high) — ${levels.length} S/R levels`,
+    };
   }
 
   return null;

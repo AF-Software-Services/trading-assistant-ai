@@ -5,6 +5,13 @@ export default defineConfig({
   build: {
     outDir: '../dist/ui',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        entryFileNames: 'assets/index.js',
+        chunkFileNames: 'assets/index.js',
+        assetFileNames: 'assets/index[extname]',
+      },
+    },
   },
   server: {
     proxy: {

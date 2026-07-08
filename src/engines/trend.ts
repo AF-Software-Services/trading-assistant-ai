@@ -135,27 +135,17 @@ export function analyseTrend(
   const alignment = emaAlignment(ema9, ema21, ema50, atr);
   const momentum  = assessMomentum(candles, ema9);
 
-  // Combine EMA alignment with market structure trend
-  let bias: TrendBias;
-  if (alignment === "bullish" && (structure.trend === "uptrend" || structure.trend === "unclear")) {
-    bias = "uptrend";
-  } else if (alignment === "bearish" && (structure.trend === "downtrend" || structure.trend === "unclear")) {
-    bias = "downtrend";
-  } else if (alignment === "flat") {
-    bias = "range";
-  } else if (alignment === "mixed") {
-    bias = structure.trend; // fall back to market structure
-  } else {
-    bias = structure.trend;
-  }
+  // Swing structure (HH/HL = bullish, LH/LL = bearish) is the primary signal.
+  // EMA alignment is used only to confirm strength — it cannot override structure.
+  let bias: TrendBias = structure.trend;
 
-  // Confidence: how well EMA and structure agree
   const emaStructureAgree =
     (alignment === "bullish" && structure.trend === "uptrend") ||
     (alignment === "bearish" && structure.trend === "downtrend") ||
     (alignment === "flat"    && structure.trend === "range");
 
-  const confidence = emaStructureAgree ? 80 : 50;
+  // Confidence: high when structure and EMAs agree, lower when only structure present
+  const confidence = emaStructureAgree ? 85 : structure.trend !== "unclear" ? 60 : 40;
 
   return {
     pair,

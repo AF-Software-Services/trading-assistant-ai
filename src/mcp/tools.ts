@@ -3,26 +3,24 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CurrencyPair, Timeframe } from "../types/market.ts";
 import { PHASE1_PAIRS } from "../types/market.ts";
 import { createMarketDataProvider } from "../providers/factory.ts";
-import { analyseMarketStructure } from "../engines/market-structure.ts";
-import { detectZones, getZoneAlerts, markBrokenByPrice, detectReactionLevels, detectAreaOfInterest } from "../engines/support-resistance.ts";
-import { detectAllSignals } from "../engines/candlestick.ts";
-import { detectAllPatterns } from "../engines/pattern.ts";
-import { analyseTrend, calculateATR } from "../engines/trend.ts";
-import { generateRecommendation, generateAllRecommendations } from "../engines/recommendation.ts";
-import { reviewRecommendation, reviewAllOpen } from "../engines/trade-management.ts";
-import { getStrategyStats, getPairPerformance } from "../engines/analytics.ts";
-import {
-  getOpenRecommendations,
-  getRecommendation,
-  updateRecommendationStatus,
-  saveRecommendation,
-  saveSignal,
-  saveScanRun,
-  saveZones,
-} from "../storage/d1.ts";
-import { setCachedAnalysis, setLastScanTime } from "../storage/kv.ts";
-import type { ScanRun } from "../storage/d1.ts";
+import { calculateATR } from "../engines/trend.ts";
+import { detectTrendlineSignal, getDailyBias, detectTrendlineOverlays } from "../engines/trendline.ts";
 import { fetchNewsForPair } from "../providers/news.ts";
+import {
+  createJournalEntry,
+  updateJournalOutcome,
+  getJournalEntries,
+  getJournalStats,
+  buildFeaturesFromContext,
+} from "../storage/journal.ts";
+import {
+  getBotSettings,
+  saveBotSettings,
+  getBotSignals,
+  updateBotSignalStatus,
+  executeSignal,
+  runBotScan,
+} from "../bot/engine.ts";
 
 // Re-export Env shape expected by tools
 export interface Env {
@@ -33,13 +31,6 @@ export interface Env {
   TWELVE_DATA_API_KEY: string;
 }
 
-function generateUUID(): string {
-  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
-    const r = (Math.random() * 16) | 0;
-    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
-  });
-}
 
 function text(content: string) {
   return { content: [{ type: "text" as const, text: content }] };
@@ -55,158 +46,69 @@ export function registerTools(server: McpServer, env: Env): void {
   // ── 1. analyse_pair ─────────────────────────────────────────────────────────
   server.tool(
     "analyse_pair",
-    "Run full multi-timeframe analysis on a currency pair following the methodology: W→D→4H top-down, AOI gate, entry signals on D/4H/2H. Risk settings (accountBalance, riskPercent, rewardRisk) are automatically read from the user's saved Trading Assistant settings stored in KV — you do NOT need to pass them unless overriding. The tool always uses the user's real account size and risk % from their Trading Assistant app.",
+    "Analyse a currency pair using the trendline bot strategy: detects 4H trendline break+retest setups with daily bias filter. Returns a live signal if conditions are met — identical logic to what the live bot and backtests use. Risk settings are read from saved Trading Assistant settings unless overridden.",
     {
       pair:           z.enum(["EUR/USD", "GBP/USD", "GBP/CAD", "USD/JPY", "EUR/GBP", "AUD/USD"]),
-      timeframe:      z.enum(["1H", "2H", "4H", "D", "W"]).optional().default("4H"),
       accountBalance: z.number().positive().optional().describe("Override only — normally read from saved settings"),
       riskPercent:    z.number().min(0.1).max(10).optional().describe("Override only — normally read from saved settings"),
       rewardRisk:     z.number().min(1).max(10).optional().describe("Override only — normally read from saved settings"),
     },
-    async ({ pair, timeframe, accountBalance, riskPercent, rewardRisk }) => {
-      const tf  = (timeframe ?? "4H") as Timeframe;
-
-      // Load saved risk settings from KV; fall back to defaults if not set
+    async ({ pair, accountBalance, riskPercent, rewardRisk }) => {
       const savedSettings = await env.KV.get("user:risk_settings", "json") as
         { accountBalance?: number; riskPercent?: number; rewardRisk?: number } | null;
       const resolvedBalance = accountBalance ?? savedSettings?.accountBalance;
       const resolvedRiskPct = riskPercent    ?? savedSettings?.riskPercent;
-      const rrRatio         = rewardRisk     ?? savedSettings?.rewardRisk ?? 1.2;
+      const rrRatio         = rewardRisk     ?? savedSettings?.rewardRisk ?? 3.0;
+      const riskAmount      = resolvedBalance && resolvedRiskPct
+        ? resolvedBalance * (resolvedRiskPct / 100) : undefined;
 
-      // Fetch W, D, 4H, 2H in parallel — plus tick
-      const [candles4H, candlesD, candlesW, tick] = await Promise.all([
-        provider.getCandles(pair as CurrencyPair, "4H", 200),
-        provider.getCandles(pair as CurrencyPair, "D",  100),
-        provider.getCandles(pair as CurrencyPair, "W",   52),
+      const [candles4H, candlesD, tick] = await Promise.all([
+        provider.getCandles(pair as CurrencyPair, "4H",   200),
+        provider.getCandles(pair as CurrencyPair, "1day",  30),
         provider.getLatestPrice(pair as CurrencyPair),
       ]);
-      // 2H fetched separately (may not always be needed — reuse 4H if tf=4H)
-      const candles2H = (tf === "2H")
-        ? await provider.getCandles(pair as CurrencyPair, "2H", 200)
-        : await provider.getCandles(pair as CurrencyPair, "2H", 100);
 
-      const candles = tf === "4H" ? candles4H : tf === "D" ? candlesD
-        : tf === "W" ? candlesW : tf === "2H" ? candles2H
-        : await provider.getCandles(pair as CurrencyPair, tf, 200);
+      const atr4H      = calculateATR(candles4H);
+      const dailyBias  = getDailyBias(candlesD);
+      const tlSignal   = detectTrendlineSignal(candles4H, rrRatio, 5, candlesD);
+      const tlOverlays = detectTrendlineOverlays(candles4H);
 
-      const atr     = calculateATR(candles4H);
-      const zonesW  = markBrokenByPrice(detectZones(candlesW,  "W",  atr), tick.mid, atr);
-      const aoi     = detectAreaOfInterest(candlesW, atr);
+      const lots = tlSignal && riskAmount
+        ? Math.floor((riskAmount / (Math.abs(tlSignal.entryPrice - tlSignal.stopLoss) * (pair.includes("JPY") ? 1000 : 100000))) * 100) / 100
+        : null;
 
-      // AOI hard gate: price must be inside (or approaching within 1.5 ATR) the AOI
-      // to progress to entry signals. Report status clearly.
-      const priceInAOI      = aoi && tick.mid >= aoi.low && tick.mid <= aoi.high;
-      const priceNearAOI    = aoi && !priceInAOI &&
-        Math.abs(tick.mid - (aoi.bias === "bullish" ? aoi.low : aoi.high)) <= atr * 1.5;
-      const aoiGatePassed   = priceInAOI || priceNearAOI;
-
-      const structure = analyseMarketStructure(candles, tf);
-      const zones     = markBrokenByPrice(detectZones(candles, tf, atr), tick.mid, atr);
-      const trend     = analyseTrend(candles, structure);
-      const alerts    = getZoneAlerts(tick.mid, zones, atr);
-
-      // ── Multi-timeframe entry signal detection ──────────────────────────────
-      // Check D, 4H, 2H separately. Each confirmed closed candle on its own TF
-      // is valid. Multiple TFs confirming = stronger signal.
-      const makeFormingCandle = (candleSet: typeof candles4H, tfLabel: Timeframe) => {
-        const last = candleSet[candleSet.length - 1]!;
-        return { timestamp: Date.now(), open: last.close,
-          high: Math.max(last.close, tick.mid), low: Math.min(last.close, tick.mid),
-          close: tick.mid, timeframe: tfLabel, pair: pair as CurrencyPair };
-      };
-
-      const signalsD  = detectAllSignals([...candlesD,  makeFormingCandle(candlesD,  "D")].slice(-22), zones);
-      const signals4H = detectAllSignals([...candles4H, makeFormingCandle(candles4H, "4H")].slice(-22), zones);
-      const signals2H = detectAllSignals([...candles2H, makeFormingCandle(candles2H, "2H")].slice(-22), zones);
-
-      // Combine all signals, tag with which TFs confirmed
-      const allSignalMap = new Map<string, { signal: typeof signalsD[0]; timeframes: Timeframe[] }>();
-      const ENTRY_TYPES = new Set(["bullish_engulfing","bearish_engulfing","morning_star","evening_star","shooting_star","hammer"]);
-
-      for (const [sig, tfLabel] of [
-        ...signalsD.map(s => [s, "D"] as const),
-        ...signals4H.map(s => [s, "4H"] as const),
-        ...signals2H.map(s => [s, "2H"] as const),
-      ]) {
-        if (!ENTRY_TYPES.has(sig.type)) continue;
-        // Group signals of same type within 2 ATR of each other as one multi-TF confirmation
-        const key = `${sig.type}:${Math.round(sig.price / (atr * 2))}`;
-        const existing = allSignalMap.get(key);
-        if (existing) {
-          if (!existing.timeframes.includes(tfLabel)) existing.timeframes.push(tfLabel);
-          if (sig.confidence > existing.signal.confidence) existing.signal = sig;
-        } else {
-          allSignalMap.set(key, { signal: sig, timeframes: [tfLabel] });
-        }
-      }
-
-      // Build confirmed entry signals with multi-TF bonus
-      const entrySignals = [...allSignalMap.values()].map(({ signal, timeframes }) => {
-        const tfBonus = (timeframes.length - 1) * 8; // +8% per additional TF
-        return {
-          ...signal,
-          confidence: Math.min(100, signal.confidence + tfBonus),
-          confirmedOn: timeframes.sort(),
-          multiTfConfirmed: timeframes.length > 1,
-          strength: timeframes.length >= 3 ? "strong" : timeframes.length === 2 ? "moderate" : "single-tf",
-        };
-      }).sort((a, b) => b.confidence - a.confidence);
-
-      // Most recent valid entry signal
-      const latestEntry = entrySignals[entrySignals.length - 1] ?? null;
-
-      // AOI gate status message
-      const aoiStatus = !aoi
-        ? "NO AOI — weekly structure lacks 3+ confluent zones. Analysis-only mode."
-        : priceInAOI
-          ? `INSIDE AOI (${aoi.low.toFixed(5)}–${aoi.high.toFixed(5)}) — entry signals valid`
-          : priceNearAOI
-            ? `APPROACHING AOI (${aoi.low.toFixed(5)}–${aoi.high.toFixed(5)}) — within 1.5×ATR, prepare`
-            : `OUTSIDE AOI (${aoi.low.toFixed(5)}–${aoi.high.toFixed(5)}) — wait for price to enter before acting on signals`;
-
-      // Data freshness
-      const lastClosed = candles[candles.length - 1]!;
-      const tfMs: Record<string, number> = { "1H": 3600000, "2H": 7200000, "4H": 14400000, "D": 86400000, "W": 604800000 };
-      const candleAgeHours = +((Date.now() - lastClosed.timestamp) / 3600000).toFixed(1);
-      const expectedMaxAgeHours = (tfMs[tf] ?? 86400000) * 2 / 3600000;
-      const isStale = candleAgeHours > expectedMaxAgeHours;
-      const dataFreshness = {
-        lastClosedCandle: new Date(lastClosed.timestamp).toISOString(),
-        lastClosedCandleAgeHours: candleAgeHours,
-        currentPrice: tick.mid, analysedAt: new Date().toISOString(), isStale,
-        warning: isStale ? `Last closed ${tf} candle is ${candleAgeHours}h old.` : null,
-      };
-
-      const riskAmount = resolvedBalance && resolvedRiskPct ? resolvedBalance * (resolvedRiskPct / 100) : undefined;
-      const recs = await generateRecommendation({
-        pair: pair as CurrencyPair, provider,
-        candles4H, candlesD, candlesW, livePrice: tick.mid,
-        accountSize: resolvedBalance, maxRisk: riskAmount, rrRatio,
-      });
-
-      const patterns4H = detectAllPatterns(candles4H, pair, "4H");
-      const patternsD  = detectAllPatterns(candlesD,  pair, "D");
-      const patterns   = [...patterns4H, ...patternsD];
-      const reactionLevels = detectReactionLevels(candles, atr, 10);
+      const status = tlSignal
+        ? `SIGNAL: ${tlSignal.direction.toUpperCase()} @ ${tlSignal.entryPrice} (score ${tlSignal.score})`
+        : `No signal — daily bias: ${dailyBias}`;
 
       return json({
-        pair, timeframe: tf, dataFreshness,
-        aoi, aoiStatus, aoiGatePassed,
-        structure, zones, zonesW, reactionLevels,
-        trend, patterns,
-        entrySignals,           // multi-TF confirmed signals
-        signals: entrySignals,  // backward-compat alias
-        zoneAlerts: alerts,
-        recommendations: recs,
-        rewardRiskRatio: rrRatio,
+        pair,
+        currentPrice: tick.mid,
+        atr:          +atr4H.toFixed(5),
+        analysedAt:   new Date().toISOString(),
+        status,
+        dailyBias,
+        signal: tlSignal ? {
+          direction:   tlSignal.direction,
+          entryPrice:  tlSignal.entryPrice,
+          stopLoss:    tlSignal.stopLoss,
+          takeProfit:  tlSignal.takeProfit,
+          lots,
+          score:       tlSignal.score,
+          reasons:     tlSignal.reasons,
+          actionLine:  tlSignal.actionLine,
+          safetyLine:  tlSignal.safetyLine,
+          breakIndex:  tlSignal.breakIndex,
+          retestIndex: tlSignal.retestIndex,
+        } : null,
+        trendlineOverlays: tlOverlays,
         riskSettings: {
           accountBalance: resolvedBalance ?? null,
           riskPercent:    resolvedRiskPct ?? null,
           maxRiskAmount:  riskAmount ?? null,
           rewardRisk:     rrRatio,
-          source: (accountBalance || riskPercent) ? "override" : savedSettings ? "saved" : "default",
           warning: !resolvedBalance || !resolvedRiskPct
-            ? "⚠️ NO RISK SETTINGS SAVED — position sizing and R:R calculations are using defaults. Tell the user to open the Trading Assistant UI and check their ⚙ Risk settings, or call set_risk_settings to save them now."
+            ? "No risk settings saved — call set_risk_settings to enable position sizing."
             : null,
         },
       });
@@ -275,255 +177,7 @@ export function registerTools(server: McpServer, env: Env): void {
     }
   );
 
-  // ── 4. analyse_all_pairs ─────────────────────────────────────────────────────
-  server.tool(
-    "analyse_all_pairs",
-    "Run full analysis on all 6 Phase 1 currency pairs and return recommendations.",
-    {},
-    async () => {
-      const recs = await generateAllRecommendations(PHASE1_PAIRS, provider);
-      return json({ recommendations: recs, count: recs.length, generatedAt: Date.now() });
-    }
-  );
 
-  // ── 3. get_market_structure ──────────────────────────────────────────────────
-  server.tool(
-    "get_market_structure",
-    "Get market structure (trend, swing points, HH/HL/LH/LL) for a pair and timeframe.",
-    {
-      pair: z.enum(["EUR/USD", "GBP/USD", "GBP/CAD", "USD/JPY", "EUR/GBP", "AUD/USD"]),
-      timeframe: z.enum(["1H", "4H", "D", "W"]).optional().default("4H"),
-    },
-    async ({ pair, timeframe }) => {
-      const tf = (timeframe ?? "4H") as Timeframe;
-      const candles   = await provider.getCandles(pair as CurrencyPair, tf, 200);
-      const structure = analyseMarketStructure(candles, tf);
-      return json(structure);
-    }
-  );
-
-  // ── 4. get_support_resistance ────────────────────────────────────────────────
-  server.tool(
-    "get_support_resistance",
-    "Get support and resistance zones for a pair and timeframe.",
-    {
-      pair: z.enum(["EUR/USD", "GBP/USD", "GBP/CAD", "USD/JPY", "EUR/GBP", "AUD/USD"]),
-      timeframe: z.enum(["1H", "4H", "D", "W"]).optional().default("D"),
-    },
-    async ({ pair, timeframe }) => {
-      const tf = (timeframe ?? "D") as Timeframe;
-      const candles = await provider.getCandles(pair as CurrencyPair, tf, 200);
-      const atr     = calculateATR(candles);
-      const zones   = detectZones(candles, tf, atr);
-      return json({ pair, timeframe: tf, zones, count: zones.length });
-    }
-  );
-
-  // ── 5. get_candlestick_signals ───────────────────────────────────────────────
-  server.tool(
-    "get_candlestick_signals",
-    "Get recent candlestick signals (engulfing patterns, hammers) for a pair and timeframe. Returns signals from the last 20 candles only, including any signal on the current forming candle.",
-    {
-      pair: z.enum(["EUR/USD", "GBP/USD", "GBP/CAD", "USD/JPY", "EUR/GBP", "AUD/USD"]),
-      timeframe: z.enum(["1H", "4H", "D", "W"]).optional().default("4H"),
-    },
-    async ({ pair, timeframe }) => {
-      const tf = (timeframe ?? "4H") as Timeframe;
-      const [candles, tick] = await Promise.all([
-        provider.getCandles(pair as CurrencyPair, tf, 100),
-        provider.getLatestPrice(pair as CurrencyPair),
-      ]);
-      const atr   = calculateATR(candles);
-      const zones = markBrokenByPrice(detectZones(candles, tf, atr), tick.mid, atr);
-
-      // Append forming candle so the current incomplete bar is included
-      const lastClosed = candles[candles.length - 1]!;
-      const forming = {
-        timestamp: Date.now(),
-        open:  lastClosed.close,
-        high:  Math.max(lastClosed.close, tick.mid),
-        low:   Math.min(lastClosed.close, tick.mid),
-        close: tick.mid,
-        timeframe: tf,
-        pair: pair as CurrencyPair,
-      };
-      const candlesWithForming = [...candles, forming];
-
-      // Only look at last 20 candles so June signals don't dominate
-      const recentSlice = candlesWithForming.slice(-22); // +2 for context
-      const signals = detectAllSignals(recentSlice, zones);
-
-      return json({
-        pair,
-        timeframe: tf,
-        currentPrice: tick.mid,
-        signals,
-        count: signals.length,
-      });
-    }
-  );
-
-  // ── 6. get_patterns ──────────────────────────────────────────────────────────
-  server.tool(
-    "get_patterns",
-    "Detect chart patterns (Head & Shoulders, Inverse H&S) for a pair across 4H and Daily timeframes. Returns pattern type, status (forming/confirmed), neckline, confidence, and price target.",
-    {
-      pair: z.enum(["EUR/USD", "GBP/USD", "GBP/CAD", "USD/JPY", "EUR/GBP", "AUD/USD"]),
-    },
-    async ({ pair }) => {
-      const [candles4H, candlesD] = await Promise.all([
-        provider.getCandles(pair as CurrencyPair, "4H", 200),
-        provider.getCandles(pair as CurrencyPair, "D",  100),
-      ]);
-      const patterns4H = detectAllPatterns(candles4H, pair, "4H");
-      const patternsD  = detectAllPatterns(candlesD,  pair, "D");
-      const patterns   = [...patterns4H, ...patternsD];
-      return json({ pair, patterns, count: patterns.length });
-    }
-  );
-
-  // ── 7. get_trade_recommendations ─────────────────────────────────────────────
-  server.tool(
-    "get_trade_recommendations",
-    "Get all current open trade recommendations stored in the database.",
-    {},
-    async () => {
-      const recs = await getOpenRecommendations(env.DB);
-      return json({ recommendations: recs, count: recs.length });
-    }
-  );
-
-  // ── 8. explain_signal ────────────────────────────────────────────────────────
-  server.tool(
-    "explain_signal",
-    "Get a human-readable explanation of a trade recommendation including full reasoning and invalidation conditions.",
-    {
-      recommendation_id: z.string().uuid(),
-    },
-    async ({ recommendation_id }) => {
-      const rec = await getRecommendation(env.DB, recommendation_id);
-      if (!rec) return text(`No recommendation found with id: ${recommendation_id}`);
-
-      const lines = [
-        `=== Trade Recommendation: ${rec.pair} ${rec.direction.toUpperCase()} ===`,
-        `ID:         ${rec.id}`,
-        `Setup:      ${rec.setupType}`,
-        `Confidence: ${rec.confidence}/100`,
-        `Action:     ${rec.action}`,
-        `Status:     ${rec.status}`,
-        ``,
-        `Entry Zone: ${rec.entryZone.low.toFixed(5)} – ${rec.entryZone.high.toFixed(5)}`,
-        `Stop Idea:  ${rec.stopIdea.toFixed(5)}`,
-        `Target 1:   ${rec.target1.toFixed(5)}`,
-        ...(rec.target2 ? [`Target 2:   ${rec.target2.toFixed(5)}`] : []),
-        `R:R Ratio:  ${rec.rewardRiskRatio.toFixed(2)}`,
-        `Risk:       £${rec.riskAmount.toFixed(2)}`,
-        `Reward:     £${rec.rewardAmount.toFixed(2)}`,
-        ``,
-        `Score Breakdown (${rec.scoreBreakdown.tradeClass}):`,
-        `  HTF Alignment:      ${rec.scoreBreakdown.htfAlignment}/30`,
-        `  Discount/Premium:   ${rec.scoreBreakdown.discountPremium}/25`,
-        `  Trigger Signal:     ${rec.scoreBreakdown.triggerSignal}/20`,
-        `  Structure Intact:   ${rec.scoreBreakdown.structureIntact}/15`,
-        `  R:R Quality:        ${rec.scoreBreakdown.rrQuality}/10`,
-        `  TOTAL:              ${rec.scoreBreakdown.total}/100`,
-        ...(rec.scoreBreakdown.blockers.length > 0 ? [`  Blockers: ${rec.scoreBreakdown.blockers.join("; ")}`] : []),
-        ``,
-        `Reasons:`,
-        ...rec.reasons.map(r => `  • ${r}`),
-        ``,
-        `Invalidation Conditions:`,
-        ...rec.invalidationConditions.map(c => `  ✗ ${c}`),
-        ``,
-        `Created:  ${new Date(rec.createdAt).toISOString()}`,
-        `Expires:  ${new Date(rec.expiresAt).toISOString()}`,
-      ];
-      return text(lines.join("\n"));
-    }
-  );
-
-  // ── 9. get_open_recommendations ──────────────────────────────────────────────
-  server.tool(
-    "get_open_recommendations",
-    "Get open recommendations with live management suggestions.",
-    {},
-    async () => {
-      const recs        = await getOpenRecommendations(env.DB);
-      const suggestions = await reviewAllOpen(recs, provider);
-      return json({ recommendations: recs, managementSuggestions: suggestions });
-    }
-  );
-
-  // ── 10. review_recommendation ────────────────────────────────────────────────
-  server.tool(
-    "review_recommendation",
-    "Trigger a trade management review for a specific recommendation.",
-    {
-      recommendation_id: z.string().uuid(),
-      notes: z.string().optional(),
-    },
-    async ({ recommendation_id, notes }) => {
-      const rec = await getRecommendation(env.DB, recommendation_id);
-      if (!rec) return text(`No recommendation found with id: ${recommendation_id}`);
-      const suggestion = await reviewRecommendation(rec, provider);
-      return json({ recommendation: rec, suggestion, notes });
-    }
-  );
-
-  // ── 11. close_recommendation ─────────────────────────────────────────────────
-  server.tool(
-    "close_recommendation",
-    "Mark a recommendation as closed with a given reason.",
-    {
-      recommendation_id: z.string().uuid(),
-      reason: z.string(),
-    },
-    async ({ recommendation_id, reason }) => {
-      const rec = await getRecommendation(env.DB, recommendation_id);
-      if (!rec) return text(`No recommendation found with id: ${recommendation_id}`);
-      await updateRecommendationStatus(env.DB, recommendation_id, "closed", reason);
-      return text(`Recommendation ${recommendation_id} closed. Reason: ${reason}`);
-    }
-  );
-
-  // ── 12. search_history ───────────────────────────────────────────────────────
-  server.tool(
-    "search_history",
-    "Search historical recommendations with optional filters.",
-    {
-      pair:           z.enum(["EUR/USD", "GBP/USD", "GBP/CAD", "USD/JPY", "EUR/GBP", "AUD/USD"]).optional(),
-      direction:      z.enum(["buy", "sell", "neutral"]).optional(),
-      min_confidence: z.number().min(0).max(100).optional(),
-      limit:          z.number().min(1).max(200).optional().default(50),
-    },
-    async ({ pair, direction, min_confidence, limit }) => {
-      let query = `SELECT * FROM recommendations WHERE 1=1`;
-      const binds: (string | number)[] = [];
-      if (pair)           { query += ` AND pair = ?`;       binds.push(pair); }
-      if (direction)      { query += ` AND direction = ?`;  binds.push(direction); }
-      if (min_confidence) { query += ` AND confidence >= ?`; binds.push(min_confidence); }
-      query += ` ORDER BY created_at DESC LIMIT ?`;
-      binds.push(limit ?? 50);
-
-      const stmt = env.DB.prepare(query);
-      const rows = await stmt.bind(...binds).all<Record<string, unknown>>();
-      return json({ results: rows.results, count: rows.results.length });
-    }
-  );
-
-  // ── 13. get_statistics ───────────────────────────────────────────────────────
-  server.tool(
-    "get_statistics",
-    "Get overall strategy statistics and per-pair performance metrics.",
-    {},
-    async () => {
-      const strategy = await getStrategyStats(env.DB);
-      const pairStats = await Promise.all(
-        PHASE1_PAIRS.map(p => getPairPerformance(env.DB, p))
-      );
-      return json({ strategy, pairs: pairStats });
-    }
-  );
 
   // ── 14. open_chart ───────────────────────────────────────────────────────────
   server.tool(
@@ -540,28 +194,23 @@ export function registerTools(server: McpServer, env: Env): void {
       const encodedPair = encodeURIComponent(p);
       const chartUrl = `https://trading-assistant-ai.andrew-dobson.workers.dev/?pair=${encodedPair}&timeframe=${tf}`;
 
-      // Run quick analysis
-      const candles   = await provider.getCandles(p, "1H", 200);
-      const atr       = calculateATR(candles);
-      const structure = analyseMarketStructure(candles, tf);
-      const zones     = detectZones(candles, tf, atr);
-      const trend     = analyseTrend(candles, structure);
-      const signals   = detectAllSignals(candles, zones);
-      const lastSig   = signals[signals.length - 1];
-
-      const trendLabel = trend.bias === "uptrend"   ? "▲ UPTREND"
-                       : trend.bias === "downtrend" ? "▼ DOWNTREND"
-                       :                              "◆ RANGE";
+      const [candles4H, candlesD] = await Promise.all([
+        provider.getCandles(p, "4H",   200),
+        provider.getCandles(p, "1day",  30),
+      ]);
+      const dailyBias = getDailyBias(candlesD);
+      const tlSignal  = detectTrendlineSignal(candles4H, 3.0, 5, candlesD);
 
       const lines = [
         `Chart URL: ${chartUrl}`,
         ``,
-        `=== ${p} — ${tf} Analysis ===`,
-        `Trend:    ${trendLabel}`,
-        `Zones:    ${zones.length} active (${zones.filter(z => z.type === "resistance").length} resistance, ${zones.filter(z => z.type === "support").length} support)`,
-        lastSig ? `Last Signal: ${lastSig.type} (confidence: ${lastSig.confidence}%)` : `Last Signal: None detected`,
+        `=== ${p} — Trendline Analysis ===`,
+        `Daily Bias: ${dailyBias.toUpperCase()}`,
+        tlSignal
+          ? `Signal: ${tlSignal.direction.toUpperCase()} @ ${tlSignal.entryPrice} | SL ${tlSignal.stopLoss} | TP ${tlSignal.takeProfit} (score ${tlSignal.score})`
+          : `No trendline signal — waiting for break+retest setup`,
         ``,
-        `Open the chart link above to view candlesticks, S/R zones, and set up a trade idea.`,
+        `Open the chart link above to view candlesticks and trendline overlays.`,
       ];
 
       return text(lines.join("\n"));
@@ -608,57 +257,354 @@ export function registerTools(server: McpServer, env: Env): void {
     }
   );
 
-  // ── 16. run_scheduled_scan ───────────────────────────────────────────────────
+  // ── 16. log_trade ────────────────────────────────────────────────────────────
   server.tool(
-    "run_scheduled_scan",
-    "Trigger a full scan of all currency pairs, generate recommendations, and persist results.",
-    {},
-    async () => {
-      const start = Date.now();
-      const recs  = await generateAllRecommendations(PHASE1_PAIRS, provider);
+    "log_trade",
+    "Record a trade entry in the journal with full ML feature capture. Call this when the user confirms they are taking a trade. Captures signal context, zone data, timing, and candle snapshots automatically. Returns the journal entry ID for later outcome tracking.",
+    {
+      pair:             z.enum(["EUR/USD", "GBP/USD", "GBP/CAD", "USD/JPY", "EUR/GBP", "AUD/USD"]),
+      direction:        z.enum(["buy", "sell"]),
+      entryPrice:       z.number().describe("Actual entry price"),
+      stopLoss:         z.number().describe("Stop loss price"),
+      target:           z.number().describe("Take profit / target price"),
+      timeframe:        z.string().optional().describe("Entry timeframe e.g. 4H, D"),
+      confidence:       z.number().min(0).max(100).optional().describe("Signal confidence 0-100"),
+      recommendationId: z.string().optional().describe("ID from analyse_pair if available"),
+      notes:            z.string().optional(),
+      // Feature context from analysis
+      mtfScore:         z.number().optional(),
+      mtfAligned:       z.boolean().optional(),
+      signalType:       z.string().optional(),
+      signalConfidence: z.number().optional(),
+      zoneStrength:     z.number().optional(),
+      zoneType:         z.string().optional(),
+      zoneTimeframe:    z.string().optional(),
+      aoiConfirmed:     z.boolean().optional(),
+      rrRatio:          z.number().optional(),
+      atrPips:          z.number().optional(),
+      stopPips:         z.number().optional(),
+      swingStructure:   z.string().optional(),
+      trendStrength:    z.number().optional(),
+      newsSentiment:    z.string().optional(),
+      newsCount:        z.number().optional(),
+      totalScore:       z.number().optional(),
+    },
+    async ({
+      pair, direction, entryPrice, stopLoss, target, timeframe,
+      confidence, recommendationId, notes,
+      ...featureCtx
+    }) => {
+      // Fetch recent candles for snapshot
+      let candles4h: Array<{ open: number; high: number; low: number; close: number }> = [];
+      let candlesD:  Array<{ open: number; high: number; low: number; close: number }> = [];
+      try {
+        const raw4h = await provider.getCandles(pair, "4H", 20);
+        const rawD  = await provider.getCandles(pair, "1day", 10);
+        candles4h = raw4h.map(c => ({ open: c.open, high: c.high, low: c.low, close: c.close }));
+        candlesD  = rawD.map(c => ({ open: c.open, high: c.high, low: c.low, close: c.close }));
+      } catch { /* candle snapshot is best-effort */ }
 
-      // Persist recommendations
-      for (const rec of recs) {
-        await saveRecommendation(env.DB, rec);
+      const features = buildFeaturesFromContext({ ...featureCtx, candles4h, candlesD });
+      const now = new Date();
 
-        // Cache analysis
-        const candles = await provider.getCandles(rec.pair, "4H", 200);
-        const atr     = calculateATR(candles);
-        const structure = analyseMarketStructure(candles, "4H");
-        const zones     = detectZones(candles, "4H", atr);
-        const trend     = analyseTrend(candles, structure);
-        await setCachedAnalysis(env.KV, rec.pair, {
-          pair: rec.pair, timeframe: "4H", structure, zones, trend, cachedAt: Date.now(),
-        });
-
-        // Save signals
-        const signals = detectAllSignals(candles, zones);
-        for (const sig of signals.slice(-3)) {
-          await saveSignal(env.DB, sig);
-        }
-
-        // Save zones
-        await saveZones(env.DB, zones);
-      }
-
-      const scanRun: ScanRun = {
-        id: generateUUID(),
-        sessionName: "manual_scan",
-        pairsScanned: PHASE1_PAIRS,
-        recommendationsGenerated: recs.length,
-        createdAt: start,
-        durationMs: Date.now() - start,
-      };
-      await saveScanRun(env.DB, scanRun);
-      await setLastScanTime(env.KV, "manual_scan", start);
-
-      return json({
-        message: "Scan complete",
-        pairsScanned: PHASE1_PAIRS.length,
-        recommendationsGenerated: recs.length,
-        durationMs: Date.now() - start,
-        recommendations: recs,
+      const id = await createJournalEntry(env.DB, {
+        recommendationId: recommendationId ?? null,
+        pair,
+        direction,
+        timeframe: timeframe ?? "4H",
+        entryPrice,
+        stopLoss,
+        target,
+        confidence: confidence ?? features.totalScore,
+        session: features.session,
+        dayOfWeek: now.getUTCDay(),
+        features,
+        notes: notes ?? null,
+        createdAt: Date.now(),
       });
+
+      const pipFactor = pair.includes("JPY") ? 100 : 10000;
+      const stopPipsCalc = Math.abs(entryPrice - stopLoss) * pipFactor;
+      const tpPipsCalc   = Math.abs(target - entryPrice)  * pipFactor;
+      const rr           = stopPipsCalc > 0 ? tpPipsCalc / stopPipsCalc : 0;
+
+      return text(
+        `Trade logged successfully.\n\n` +
+        `Journal ID: ${id}\n` +
+        `Pair: ${pair} | Direction: ${direction.toUpperCase()}\n` +
+        `Entry: ${entryPrice} | SL: ${stopLoss} | TP: ${target}\n` +
+        `Stop: ${stopPipsCalc.toFixed(1)} pips | R:R ${rr.toFixed(2)}\n` +
+        `Session: ${features.session} | Day: ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][now.getUTCDay()]}\n\n` +
+        `When the trade closes, call update_trade_outcome with ID: ${id}`
+      );
     }
   );
+
+  // ── 17. update_trade_outcome ──────────────────────────────────────────────────
+  server.tool(
+    "update_trade_outcome",
+    "Record the outcome of a completed trade. Call this when the user reports a trade closed — hit TP (win), hit SL (loss), or closed at breakeven. Automatically calculates pips P&L and actual R:R achieved.",
+    {
+      journalId: z.string().describe("Journal entry ID from log_trade"),
+      result:    z.enum(["win", "loss", "breakeven"]),
+      exitPrice: z.number().describe("Price at which the trade was closed"),
+      notes:     z.string().optional().describe("What happened — e.g. 'TP1 hit, closed manually'"),
+    },
+    async ({ journalId, result, exitPrice, notes }) => {
+      try {
+        await updateJournalOutcome(env.DB, journalId, { result, exitPrice, notes });
+      } catch (e) {
+        return text(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      }
+
+      const entry = (await getJournalEntries(env.DB, { limit: 1 })).find(e => e.id === journalId);
+      const pnl = entry?.pnlPips ?? 0;
+      const rr  = entry?.rrAchieved ?? 0;
+
+      const emoji = result === "win" ? "✅" : result === "loss" ? "❌" : "⚖️";
+      return text(
+        `${emoji} Trade outcome recorded.\n\n` +
+        `Result: ${result.toUpperCase()}\n` +
+        `Exit: ${exitPrice}\n` +
+        `P&L: ${pnl > 0 ? "+" : ""}${pnl.toFixed(1)} pips\n` +
+        `R:R achieved: ${rr.toFixed(2)}\n\n` +
+        `This data is now part of your ML training set. Keep logging every trade to improve signal quality over time.`
+      );
+    }
+  );
+
+  // ── 18. get_journal_stats ─────────────────────────────────────────────────────
+  server.tool(
+    "get_journal_stats",
+    "Get aggregated performance statistics from the trade journal. Shows win rate, average R:R achieved vs targeted, P&L in pips, and breakdowns by pair, signal type, session, and day of week. Use this to identify which setups and market conditions produce the best results.",
+    {},
+    async () => {
+      const stats = await getJournalStats(env.DB);
+
+      if (stats.totalTrades === 0) {
+        return text("No trades logged yet. Use log_trade to start building your ML dataset.");
+      }
+
+      const dow = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+      const fmt = (n: number) => (n * 100).toFixed(1) + "%";
+
+      const pairLines = Object.entries(stats.byPair)
+        .sort((a, b) => b[1].trades - a[1].trades)
+        .map(([p, s]) => `  ${p}: ${s.trades} trades, ${fmt(s.winRate)} win rate`).join("\n");
+
+      const sigLines = Object.entries(stats.bySignal)
+        .sort((a, b) => b[1].trades - a[1].trades)
+        .map(([s, v]) => `  ${s}: ${v.trades} trades, ${fmt(v.winRate)} win rate`).join("\n");
+
+      const sessLines = Object.entries(stats.bySession)
+        .sort((a, b) => b[1].trades - a[1].trades)
+        .map(([s, v]) => `  ${s}: ${v.trades} trades, ${fmt(v.winRate)} win rate`).join("\n");
+
+      const dayLines = Object.entries(stats.byDayOfWeek)
+        .sort((a, b) => Number(a[0]) - Number(b[0]))
+        .map(([d, v]) => `  ${dow[Number(d)]}: ${v.trades} trades, ${fmt(v.winRate)} win rate`).join("\n");
+
+      return text(
+        `TRADE JOURNAL STATISTICS\n${"─".repeat(40)}\n\n` +
+        `Total trades logged : ${stats.totalTrades}\n` +
+        `Completed trades    : ${stats.completedTrades}\n` +
+        `Open trades         : ${stats.totalTrades - stats.completedTrades}\n\n` +
+        `OUTCOMES\n` +
+        `  Wins      : ${stats.wins}\n` +
+        `  Losses    : ${stats.losses}\n` +
+        `  Breakeven : ${stats.breakevens}\n` +
+        `  Win rate  : ${fmt(stats.winRate)}\n\n` +
+        `R:R  Targeted: ${stats.avgRrTargeted.toFixed(2)}  |  Achieved: ${stats.avgRrAchieved.toFixed(2)}\n` +
+        `Total P&L   : ${stats.totalPnlPips > 0 ? "+" : ""}${stats.totalPnlPips.toFixed(1)} pips\n\n` +
+        `BY PAIR\n${pairLines}\n\n` +
+        `BY SIGNAL TYPE\n${sigLines}\n\n` +
+        `BY SESSION\n${sessLines}\n\n` +
+        `BY DAY OF WEEK\n${dayLines}`
+      );
+    }
+  );
+
+  // ── 19. set_bot_mode ─────────────────────────────────────────────────────────
+  server.tool(
+    "set_bot_mode",
+    "Set the trading bot mode. 'off' = no automatic trading. 'approval' = bot finds setups and queues them for your review — you approve each trade before it executes. 'autonomous' = bot executes qualifying setups automatically without asking. Also configure min score threshold, max open positions, and which sessions to trade.",
+    {
+      mode:             z.enum(["off", "approval", "autonomous"]),
+      minScore:         z.number().min(0).max(100).optional().describe("Minimum signal score to act on (default 65)"),
+      maxOpenPositions: z.number().min(1).max(10).optional().describe("Max concurrent open positions (default 2)"),
+      dailyLossLimitPct:z.number().min(0).max(10).optional().describe("Daily loss limit as % of account (default 2)"),
+      pairs:            z.array(z.string()).optional().describe("Pairs to trade, empty = all 6 pairs"),
+    },
+    async ({ mode, minScore, maxOpenPositions, dailyLossLimitPct, pairs }) => {
+      const settings = await saveBotSettings(env.KV, {
+        mode,
+        ...(minScore          !== undefined ? { minScore }          : {}),
+        ...(maxOpenPositions  !== undefined ? { maxOpenPositions }  : {}),
+        ...(dailyLossLimitPct !== undefined ? { dailyLossLimitPct } : {}),
+        ...(pairs             !== undefined ? { pairs }             : {}),
+      });
+
+      const warnings: string[] = [];
+      if (mode === "autonomous") {
+        warnings.push("⚠ AUTONOMOUS mode enabled — bot will execute trades without asking you.");
+        warnings.push("Make sure your risk settings (account balance, risk %) are correct.");
+        warnings.push("Use set_bot_mode with mode='off' to stop the bot at any time.");
+      }
+
+      return text(
+        `Bot mode set to: ${mode.toUpperCase()}\n\n` +
+        `Settings:\n` +
+        `  Min score threshold : ${settings.minScore}\n` +
+        `  Max open positions  : ${settings.maxOpenPositions}\n` +
+        `  Daily loss limit    : ${settings.dailyLossLimitPct}%\n` +
+        `  Active pairs        : ${settings.pairs.length > 0 ? settings.pairs.join(", ") : "All 6 pairs"}\n\n` +
+        (warnings.length > 0 ? warnings.join("\n") : "Bot is ready.")
+      );
+    }
+  );
+
+  // ── 20. get_bot_status ────────────────────────────────────────────────────────
+  server.tool(
+    "get_bot_status",
+    "Get the current bot mode, pending signals awaiting approval, and recent bot activity.",
+    {},
+    async () => {
+      const [settings, pending, recent] = await Promise.all([
+        getBotSettings(env.KV),
+        getBotSignals(env.DB, { status: "pending", limit: 10 }),
+        getBotSignals(env.DB, { limit: 5, source: "live" }),
+      ]);
+      const token = await env.KV.get("ctrader:access_token");
+
+      const pendingLines = pending.map(s =>
+        `  [${s.id.slice(0, 8)}] ${s.pair} ${s.direction.toUpperCase()} @ ${s.entryPrice} | Score: ${s.score.toFixed(0)} | Lots: ${s.lots}\n` +
+        `    SL: ${s.stopLoss} | TP: ${s.takeProfit} | Expires: ${new Date(s.expiresAt).toUTCString()}\n` +
+        `    ${s.reasons.slice(0, 2).join("; ")}`
+      ).join("\n\n");
+
+      const recentLines = recent.map(s =>
+        `  ${s.pair} ${s.direction.toUpperCase()} — ${s.status.toUpperCase()} @ ${new Date(s.createdAt).toUTCString()}`
+      ).join("\n");
+
+      return text(
+        `BOT STATUS\n${"─".repeat(40)}\n` +
+        `Mode         : ${settings.mode.toUpperCase()}\n` +
+        `cTrader      : ${token ? "Connected" : "Not connected"}\n` +
+        `Min score    : ${settings.minConfidenceScore}\n` +
+        `Max positions: ${settings.maxOpenPositions}\n\n` +
+        (pending.length > 0
+          ? `PENDING SIGNALS (${pending.length}) — use approve_signal or reject_signal:\n${pendingLines}\n\n`
+          : `No pending signals.\n\n`) +
+        `RECENT ACTIVITY:\n${recentLines || "  None"}`
+      );
+    }
+  );
+
+  // ── 21. approve_signal ────────────────────────────────────────────────────────
+  server.tool(
+    "approve_signal",
+    "Approve a pending bot signal and execute the trade on cTrader. Use get_bot_status to see pending signal IDs.",
+    {
+      signalId: z.string().describe("Signal ID from get_bot_status (first 8 chars are enough)"),
+    },
+    async ({ signalId }) => {
+      // Find the signal (allow partial ID match)
+      const pending = await getBotSignals(env.DB, { status: "pending", limit: 20 });
+      const signal  = pending.find(s => s.id.startsWith(signalId) || s.id === signalId);
+      if (!signal) return text(`No pending signal found with ID starting with: ${signalId}`);
+
+      if (signal.expiresAt < Date.now()) {
+        await updateBotSignalStatus(env.DB, signal.id, "expired");
+        return text(`Signal ${signalId} has expired — run a new scan to get fresh setups.`);
+      }
+
+      const token = await env.KV.get("ctrader:access_token");
+      if (!token) return text("cTrader is not connected. Go to the trading app and connect first.");
+
+      await updateBotSignalStatus(env.DB, signal.id, "approved");
+
+      try {
+        await executeSignal(
+          signal, env.DB, env.KV, token,
+          env.CTRADER_CLIENT_ID, env.CTRADER_CLIENT_SECRET,
+          parseInt(env.CTRADER_ACCOUNT_ID)
+        );
+
+        const pipFactor = signal.pair.includes("JPY") ? 100 : 10000;
+        const stopPips  = Math.abs(signal.entryPrice - signal.stopLoss) * pipFactor;
+        const tpPips    = Math.abs(signal.takeProfit - signal.entryPrice) * pipFactor;
+        const rr        = stopPips > 0 ? tpPips / stopPips : 0;
+
+        return text(
+          `✅ Trade executed on cTrader!\n\n` +
+          `${signal.pair} ${signal.direction.toUpperCase()}\n` +
+          `Entry  : ${signal.entryPrice}\n` +
+          `SL     : ${signal.stopLoss}  (${stopPips.toFixed(1)} pips)\n` +
+          `TP     : ${signal.takeProfit}  (${tpPips.toFixed(1)} pips)\n` +
+          `Lots   : ${signal.lots}\n` +
+          `R:R    : ${rr.toFixed(2)}\n` +
+          `Score  : ${signal.score.toFixed(0)}\n\n` +
+          `Trade has been logged to the journal. When it closes, use update_trade_outcome to record the result.`
+        );
+      } catch (e) {
+        await updateBotSignalStatus(env.DB, signal.id, "failed", {
+          errorMessage: (e as Error).message,
+        });
+        return text(`❌ Execution failed: ${(e as Error).message}`);
+      }
+    }
+  );
+
+  // ── 22. reject_signal ─────────────────────────────────────────────────────────
+  server.tool(
+    "reject_signal",
+    "Reject a pending bot signal — it will not be executed.",
+    {
+      signalId: z.string().describe("Signal ID from get_bot_status"),
+      reason:   z.string().optional().describe("Why you're rejecting this setup"),
+    },
+    async ({ signalId, reason }) => {
+      const pending = await getBotSignals(env.DB, { status: "pending", limit: 20 });
+      const signal  = pending.find(s => s.id.startsWith(signalId) || s.id === signalId);
+      if (!signal) return text(`No pending signal found with ID: ${signalId}`);
+
+      await updateBotSignalStatus(env.DB, signal.id, "rejected", {
+        rejectionReason: reason ?? "Manually rejected",
+      });
+
+      return text(`Signal ${signalId} (${signal.pair} ${signal.direction}) rejected.${reason ? ` Reason: ${reason}` : ""}`);
+    }
+  );
+
+  // ── 23. run_bot_scan ──────────────────────────────────────────────────────────
+  server.tool(
+    "run_bot_scan",
+    "Trigger an immediate bot scan across all pairs using the trendline strategy. In approval mode this queues any qualifying setups. In autonomous mode it executes them immediately. The bot only acts when a trendline break+retest is detected and the score threshold is met.",
+    {},
+    async () => {
+      const result = await runBotScan({
+        DB:                    env.DB,
+        KV:                    env.KV,
+        MARKET_DATA_PROVIDER:  env.MARKET_DATA_PROVIDER,
+        TWELVE_DATA_API_KEY:   (env as any).TWELVE_DATA_API_KEY,
+        CTRADER_CLIENT_ID:     env.CTRADER_CLIENT_ID,
+        CTRADER_CLIENT_SECRET: env.CTRADER_CLIENT_SECRET,
+        CTRADER_ACCOUNT_ID:    env.CTRADER_ACCOUNT_ID,
+      });
+
+      return text(
+        `BOT SCAN COMPLETE\n${"─".repeat(30)}\n` +
+        `Pairs scanned  : ${result.pairsScanned}\n` +
+        `Signals found  : ${result.signalsFound}\n` +
+        `Queued (approval) : ${result.signalsQueued}\n` +
+        `Executed (auto)   : ${result.signalsExecuted}\n` +
+        `Failed         : ${result.signalsFailed}\n` +
+        (result.errors.length > 0
+          ? `\nNotes:\n${result.errors.map(e => `  • ${e}`).join("\n")}`
+          : "")
+      );
+    }
+  );
+
 }
+

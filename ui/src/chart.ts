@@ -1,6 +1,6 @@
 import { init, registerOverlay } from 'klinecharts'
 import type { Chart } from 'klinecharts'
-import type { CandleData, Zone, Signal, SwingPoint, AnalysisResult } from './api'
+import type { CandleData, Zone, Signal, SwingPoint, AnalysisResult, TrendlineOverlayResult, TrendlineOverlayLine } from './api'
 import {
   srZoneOverlay,
   tradeRectOverlay,
@@ -8,6 +8,7 @@ import {
   swingLabelOverlay,
   signalMarkerOverlay,
   hnsOverlay,
+  trendLineOverlay,
 } from './overlay'
 
 // Register custom overlays once
@@ -17,6 +18,7 @@ registerOverlay(hLineOverlay)
 registerOverlay(swingLabelOverlay)
 registerOverlay(signalMarkerOverlay)
 registerOverlay(hnsOverlay)
+registerOverlay(trendLineOverlay)
 
 export interface TradeLinesState {
   entry: number
@@ -53,22 +55,26 @@ export class TradingChart {
   private signalIds: string[] = []
   // Pattern overlay IDs
   private patternIds: string[] = []
+  // Trendline overlay IDs
+  private trendlineIds: string[] = []
 
   // User-drawn overlay IDs (S/R lines + manual trade setups)
   private userDrawingIds: string[] = []
 
   // Visibility state for each overlay type
-  private visZones     = false  // default off — user draws their own
-  private visStructure = true
-  private visSignals   = true
-  private visPatterns  = true
+  private visZones      = false  // default off — user draws their own
+  private visStructure  = true
+  private visSignals    = true
+  private visPatterns   = true
+  private visTrendlines = true
 
   // Stored data for re-render on toggle
   private lastZones:     Zone[]       = []
   private lastStructure: SwingPoint[] = []
   private lastSignals:   Signal[]     = []
   private lastCandles:   CandleData[] = []
-  private lastPatterns:  AnalysisResult['patterns'] = []
+  private lastPatterns:    AnalysisResult['patterns'] = []
+  private lastTrendlines:  TrendlineOverlayResult = { resistanceLines: [], supportLines: [] }
 
   // ATR-derived suggested stop in pips
   private suggestedStopPips = 30
@@ -78,6 +84,7 @@ export class TradingChart {
   private htfZones: Zone[] = []
 
   private onTradeLinesChange: TradeLinesChangeCallback | null = null
+  onDrawingComplete: (() => void) | null = null
 
   constructor(containerId: string) {
     const container = document.getElementById(containerId)
@@ -410,6 +417,42 @@ export class TradingChart {
     if (show) this.applyPatterns(this.lastPatterns)
   }
 
+  applyTrendlines(result: TrendlineOverlayResult): void {
+    this.lastTrendlines = result
+    for (const id of this.trendlineIds) this.chart.removeOverlay({ id })
+    this.trendlineIds = []
+    if (!this.visTrendlines) return
+
+    const drawLine = (line: TrendlineOverlayLine, color: string, dash: boolean) => {
+      const id = this.chart.createOverlay({
+        name: 'trendLine',
+        points: [
+          { timestamp: line.p1Timestamp, value: line.p1Price },
+          { timestamp: line.p2Timestamp, value: line.p2Price },
+        ],
+        lock: true,
+        extendData: { color, label: '', dash },
+      })
+      if (typeof id === 'string') this.trendlineIds.push(id)
+    }
+
+    // Resistance lines = red; most recent (index 0) is solid, older ones are dashed
+    result.resistanceLines.forEach((line, i) =>
+      drawLine(line, 'rgba(239,83,80,0.9)', i > 0),
+    )
+    // Support lines = blue; most recent solid, older dashed
+    result.supportLines.forEach((line, i) =>
+      drawLine(line, 'rgba(41,182,246,0.9)', i > 0),
+    )
+  }
+
+  toggleTrendlines(show: boolean): void {
+    this.visTrendlines = show
+    for (const id of this.trendlineIds) this.chart.removeOverlay({ id })
+    this.trendlineIds = []
+    if (show) this.applyTrendlines(this.lastTrendlines)
+  }
+
   // ── Trade lines ───────────────────────────────────────────────────────────────
 
   getTradeLinesState(): TradeLinesState {
@@ -550,16 +593,13 @@ export class TradingChart {
     const color = type === 'support' ? '#3fb950' : '#f85149'
     const label = type === 'support' ? 'Support' : 'Resistance'
 
-    // Place line immediately at current price — user drags it to the exact level.
-    // This is more reliable than startDraw() which only works with built-in overlay types.
-    const price  = this.currentPrice || (this.data[Math.floor(this.data.length * 0.5)]?.close ?? 0)
-    const dragTs = this.data[Math.floor(this.data.length * 0.75)]?.timestamp ?? Date.now()
-
+    // totalStep:2 means the overlay waits for one click to set the price level.
+    // createOverlay without points puts it in drawing mode — line follows cursor, click to commit.
     const result = this.chart.createOverlay({
       name: 'hLine',
-      points: [{ timestamp: dragTs, value: price }],
-      extendData: { color, label, info: 'drag to adjust' },
+      extendData: { color, label, info: '' },
       lock: false,
+      onDrawEnd: () => { this.onDrawingComplete?.() },
     })
     if (typeof result === 'string') {
       this.userDrawingIds.push(result)

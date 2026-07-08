@@ -1,0 +1,291 @@
+import { Hono } from "hono";
+import {
+  getBotSignals,
+  updateBotSignalStatus,
+  executeSignal,
+  runBotScan,
+} from "./engine.ts";
+import {
+  listBots,
+  getBot,
+  createBot,
+  updateBot,
+  deleteBot,
+  seedBotsFromLegacyKV,
+  BOT_TYPE_REGISTRY,
+} from "./bot-types.ts";
+import type { BotInstance, BotTypeId } from "./bot-types.ts";
+import { PHASE1_PAIRS } from "../types/market.ts";
+import type { CurrencyPair } from "../types/market.ts";
+import { saveScanRun } from "../storage/d1.ts";
+import type { ScanRun } from "../storage/d1.ts";
+
+interface Env {
+  DB: D1Database;
+  KV: KVNamespace;
+  ENVIRONMENT: string;
+  MARKET_DATA_PROVIDER: string;
+  TWELVE_DATA_API_KEY: string;
+  CTRADER_CLIENT_ID: string;
+  CTRADER_CLIENT_SECRET: string;
+  CTRADER_ACCOUNT_ID: string;
+}
+
+export function createBotRouter() {
+  const app = new Hono<{ Bindings: Env }>();
+
+  // ── GET /api/v1/bot/types ─────────────────────────────────────────────────────
+  app.get("/types", (c) => {
+    return c.json(BOT_TYPE_REGISTRY);
+  });
+
+  // ── GET /api/v1/bot/bots ──────────────────────────────────────────────────────
+  app.get("/bots", async (c) => {
+    await seedBotsFromLegacyKV(c.env.DB, c.env.KV);
+    const bots = await listBots(c.env.DB);
+    return c.json(bots);
+  });
+
+  // ── POST /api/v1/bot/bots ─────────────────────────────────────────────────────
+  app.post("/bots", async (c) => {
+    const body = await c.req.json<{
+      name?: string;
+      type?: string;
+      pairs?: string[];
+    }>().catch(() => null);
+    if (!body?.type) return c.json({ error: "type is required" }, 400);
+
+    const typeDef = BOT_TYPE_REGISTRY.find(t => t.id === body.type);
+    if (!typeDef) return c.json({ error: `Unknown bot type: ${body.type}` }, 400);
+
+    const pairs = (body.pairs ?? []).filter(p =>
+      PHASE1_PAIRS.includes(p as CurrencyPair)
+    ) as CurrencyPair[];
+
+    const bot = await createBot(c.env.DB, {
+      id:       crypto.randomUUID(),
+      name:     body.name ?? typeDef.displayName,
+      type:     typeDef.id as BotTypeId,
+      mode:     "off",
+      pairs,
+      settings: { ...typeDef.defaultSettings },
+    });
+
+    return c.json(bot, 201);
+  });
+
+  // ── PUT /api/v1/bot/bots/:id ──────────────────────────────────────────────────
+  app.put("/bots/:id", async (c) => {
+    const id   = c.req.param("id");
+    const body = await c.req.json<Partial<BotInstance>>().catch(() => null);
+    if (!body) return c.json({ error: "Invalid body" }, 400);
+
+    if (body.mode && !["off", "approval", "autonomous"].includes(body.mode)) {
+      return c.json({ error: "mode must be off | approval | autonomous" }, 400);
+    }
+
+    const updated = await updateBot(c.env.DB, id, {
+      name:     body.name,
+      mode:     body.mode,
+      pairs:    body.pairs,
+      settings: body.settings,
+    });
+
+    if (!updated) return c.json({ error: "Bot not found" }, 404);
+    return c.json(updated);
+  });
+
+  // ── DELETE /api/v1/bot/bots/:id ───────────────────────────────────────────────
+  app.delete("/bots/:id", async (c) => {
+    const id = c.req.param("id");
+    const ok = await deleteBot(c.env.DB, id);
+    if (!ok) return c.json({ error: "Bot not found" }, 404);
+    return c.json({ success: true, id });
+  });
+
+  // ── POST /api/v1/bot/bots/:id/scan ────────────────────────────────────────────
+  app.post("/bots/:id/scan", async (c) => {
+    const id  = c.req.param("id");
+    const bot = await getBot(c.env.DB, id);
+    if (!bot) return c.json({ error: "Bot not found" }, 404);
+
+    try {
+      const result = await runBotScan({
+        DB:                    c.env.DB,
+        KV:                    c.env.KV,
+        MARKET_DATA_PROVIDER:  c.env.MARKET_DATA_PROVIDER,
+        TWELVE_DATA_API_KEY:   c.env.TWELVE_DATA_API_KEY,
+        CTRADER_CLIENT_ID:     c.env.CTRADER_CLIENT_ID,
+        CTRADER_CLIENT_SECRET: c.env.CTRADER_CLIENT_SECRET,
+        CTRADER_ACCOUNT_ID:    c.env.CTRADER_ACCOUNT_ID,
+        skipSessionGate:       true,
+        botInstance:           bot,
+      });
+      return c.json(result);
+    } catch (e) {
+      return c.json({ error: (e as Error).message }, 500);
+    }
+  });
+
+  // ── GET /api/v1/bot/signals ───────────────────────────────────────────────────
+  app.get("/signals", async (c) => {
+    const status = c.req.query("status");
+    const botId  = c.req.query("botId");
+    const limit  = Math.min(Number(c.req.query("limit") ?? "50"), 200);
+    const signals = await getBotSignals(c.env.DB, {
+      status: status ?? undefined,
+      botId:  botId  ?? undefined,
+      limit,
+    });
+    return c.json({ signals, count: signals.length });
+  });
+
+  // ── POST /api/v1/bot/signals/:id/approve ─────────────────────────────────────
+  app.post("/signals/:id/approve", async (c) => {
+    const id    = c.req.param("id");
+    const token = await c.env.KV.get("ctrader:access_token");
+    if (!token) return c.json({ error: "cTrader not connected" }, 401);
+
+    const rows = await c.env.DB.prepare(
+      "SELECT * FROM bot_signals WHERE id = ?"
+    ).bind(id).first<Record<string, unknown>>();
+
+    if (!rows) return c.json({ error: "Signal not found" }, 404);
+    if (rows["status"] !== "pending") {
+      return c.json({ error: `Signal is ${rows["status"]}, not pending` }, 409);
+    }
+    if ((rows["expires_at"] as number) < Date.now()) {
+      await updateBotSignalStatus(c.env.DB, id, "expired");
+      return c.json({ error: "Signal has expired" }, 410);
+    }
+
+    const signalObj = {
+      id,
+      pair:              rows["pair"]            as any,
+      direction:         rows["direction"]        as "buy" | "sell",
+      entryPrice:        rows["entry_price"]      as number,
+      stopLoss:          rows["stop_loss"]        as number,
+      takeProfit:        rows["take_profit"]      as number,
+      lots:              rows["lots"]             as number,
+      score:             rows["score"]            as number,
+      recommendationId:  rows["recommendation_id"] as string | null,
+      reasons:           JSON.parse(rows["reasons_json"] as string),
+      status:            "pending" as const,
+      createdAt:         rows["created_at"]       as number,
+      expiresAt:         rows["expires_at"]       as number,
+      executedAt:        null, ctraderPositionId: null,
+      journalId:         null, rejectionReason:   null, errorMessage: null,
+    };
+
+    await updateBotSignalStatus(c.env.DB, id, "approved");
+
+    try {
+      await executeSignal(
+        signalObj, c.env.DB, c.env.KV, token,
+        c.env.CTRADER_CLIENT_ID, c.env.CTRADER_CLIENT_SECRET,
+        parseInt(c.env.CTRADER_ACCOUNT_ID)
+      );
+      return c.json({ success: true, id });
+    } catch (e) {
+      await updateBotSignalStatus(c.env.DB, id, "failed", {
+        errorMessage: (e as Error).message,
+      });
+      return c.json({ error: (e as Error).message }, 502);
+    }
+  });
+
+  // ── POST /api/v1/bot/signals/:id/reject ──────────────────────────────────────
+  app.post("/signals/:id/reject", async (c) => {
+    const id   = c.req.param("id");
+    const body = await c.req.json<{ reason?: string }>().catch(() => ({}));
+    await updateBotSignalStatus(c.env.DB, id, "rejected", {
+      rejectionReason: body.reason ?? "Manually rejected",
+    });
+    return c.json({ success: true, id });
+  });
+
+  // ── POST /api/v1/bot/scan ─────────────────────────────────────────────────────
+  // Scan ALL active bots
+  app.post("/scan", async (c) => {
+    await seedBotsFromLegacyKV(c.env.DB, c.env.KV);
+    const bots = await listBots(c.env.DB);
+    const activeBots = bots.filter(b => b.mode !== "off");
+
+    if (activeBots.length === 0) {
+      return c.json({ error: "No active bots" });
+    }
+
+    const scanStart = Date.now();
+    const results: Record<string, unknown> = {};
+    let totalFound = 0, totalQueued = 0, totalExecuted = 0;
+    let scanError: string | null = null;
+
+    for (const bot of activeBots) {
+      try {
+        const r = await runBotScan({
+          DB:                    c.env.DB,
+          KV:                    c.env.KV,
+          MARKET_DATA_PROVIDER:  c.env.MARKET_DATA_PROVIDER,
+          TWELVE_DATA_API_KEY:   c.env.TWELVE_DATA_API_KEY,
+          CTRADER_CLIENT_ID:     c.env.CTRADER_CLIENT_ID,
+          CTRADER_CLIENT_SECRET: c.env.CTRADER_CLIENT_SECRET,
+          CTRADER_ACCOUNT_ID:    c.env.CTRADER_ACCOUNT_ID,
+          skipSessionGate:       true,
+          botInstance:           bot,
+        });
+        results[bot.id] = r;
+        totalFound    += r.signalsFound    ?? 0;
+        totalQueued   += r.signalsQueued   ?? 0;
+        totalExecuted += r.signalsExecuted ?? 0;
+      } catch (e) {
+        const msg = (e as Error).message;
+        results[bot.id] = { error: msg };
+        scanError = scanError ? `${scanError}; ${msg}` : msg;
+      }
+    }
+
+    await saveScanRun(c.env.DB, {
+      id:                       crypto.randomUUID(),
+      sessionName:              "manual_scan",
+      pairsScanned:             PHASE1_PAIRS,
+      recommendationsGenerated: 0,
+      createdAt:                scanStart,
+      durationMs:               Date.now() - scanStart,
+      signalsFound:             totalFound,
+      signalsQueued:            totalQueued,
+      signalsExecuted:          totalExecuted,
+      error:                    scanError,
+    });
+
+    return c.json(results);
+  });
+
+  // ── GET /api/v1/bot/cron-log ─────────────────────────────────────────────────
+  app.get("/cron-log", async (c) => {
+    const { results } = await c.env.DB.prepare(
+      `SELECT id, session_name, pairs_scanned, recommendations_generated, created_at, duration_ms,
+              signals_found, signals_queued, signals_executed, error
+       FROM scan_runs ORDER BY created_at DESC LIMIT 100`
+    ).all();
+    return c.json(results);
+  });
+
+  // ── GET /api/v1/bot/status ────────────────────────────────────────────────────
+  app.get("/status", async (c) => {
+    await seedBotsFromLegacyKV(c.env.DB, c.env.KV);
+    const [bots, pending, recent] = await Promise.all([
+      listBots(c.env.DB),
+      getBotSignals(c.env.DB, { status: "pending", limit: 20 }),
+      getBotSignals(c.env.DB, { limit: 10, source: "live" }),
+    ]);
+    const token = await c.env.KV.get("ctrader:access_token");
+    return c.json({
+      bots,
+      connected:      !!token,
+      pendingSignals: pending.length,
+      recentSignals:  recent,
+    });
+  });
+
+  return app;
+}

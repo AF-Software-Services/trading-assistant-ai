@@ -1,0 +1,13 @@
+ALTER TABLE backtest_trades ADD COLUMN signal_type TEXT;
+ALTER TABLE backtest_trades ADD COLUMN signal_timeframe TEXT;
+ALTER TABLE backtest_trades ADD COLUMN signal_confidence INTEGER;
+ALTER TABLE backtest_trades ADD COLUMN trend TEXT;
+ALTER TABLE backtest_trades ADD COLUMN structure TEXT;
+ALTER TABLE backtest_trades ADD COLUMN mtf_bias TEXT;
+ALTER TABLE backtest_trades ADD COLUMN mtf_label TEXT;
+ALTER TABLE backtest_trades ADD COLUMN atr REAL;
+ALTER TABLE backtest_trades ADD COLUMN in_aoi INTEGER;
+ALTER TABLE backtest_trades ADD COLUMN fib_label TEXT;
+ALTER TABLE backtest_trades ADD COLUMN trade_class TEXT;
+ALTER TABLE backtest_trades ADD COLUMN zone_type TEXT;
+ALTER TABLE backtest_trades ADD COLUMN pattern_type TEXT;

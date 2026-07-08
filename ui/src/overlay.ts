@@ -1,4 +1,70 @@
-import type { OverlayTemplate } from 'klinecharts'
+import type { OverlayTemplate, OverlayFigure } from 'klinecharts'
+
+/**
+ * Diagonal trendline overlay — two anchor points, extends to right edge of chart.
+ * Points: [{ timestamp: p1Ts, value: p1Price }, { timestamp: p2Ts, value: p2Price }]
+ * extendData: { color: string; label: string; dash?: boolean }
+ */
+export const trendLineOverlay: OverlayTemplate = {
+  name: 'trendLine',
+  totalStep: 3,
+  needDefaultPointFigure: false,
+  needDefaultXAxisFigure: false,
+  needDefaultYAxisFigure: false,
+  createPointFigures ({ overlay, coordinates, bounding }) {
+    if (coordinates.length < 2) return []
+    const extData = overlay.extendData as { color: string; label: string; dash?: boolean }
+    const color   = extData?.color ?? 'rgba(255,255,255,0.7)'
+    const label   = extData?.label ?? ''
+    const dash    = extData?.dash  ?? false
+
+    const x1 = coordinates[0]!.x
+    const y1 = coordinates[0]!.y
+    const x2 = coordinates[1]!.x
+    const y2 = coordinates[1]!.y
+
+    const chartWidth = (bounding as unknown as Record<string, number>)['width'] ?? 9999
+
+    // Extend to right edge
+    const dx = x2 - x1
+    const dy = y2 - y1
+    const xEnd = chartWidth
+    const yEnd = dx !== 0 ? y1 + dy * ((xEnd - x1) / dx) : y2
+
+    const figures: OverlayFigure[] = [
+      {
+        type: 'line',
+        attrs: { coordinates: [{ x: x1, y: y1 }, { x: xEnd, y: yEnd }] },
+        styles: {
+          style: dash ? 'dashed' : 'solid',
+          color,
+          size: dash ? 1 : 2,
+          dashedValue: dash ? [6, 4] : [1, 0],
+        },
+      },
+      {
+        type: 'circle',
+        attrs: { x: x1, y: y1, r: 3 },
+        styles: { style: 'fill', color },
+      },
+      {
+        type: 'circle',
+        attrs: { x: x2, y: y2, r: 3 },
+        styles: { style: 'fill', color },
+      },
+    ]
+
+    if (label) {
+      figures.push({
+        type: 'text',
+        attrs: { x: xEnd - 6, y: yEnd - 6, text: label, align: 'right', baseline: 'bottom' },
+        styles: { style: 'fill', color, size: 10, family: 'monospace', weight: '700' },
+      })
+    }
+
+    return figures
+  },
+}
 
 /**
  * Custom overlay: horizontal zone band (support or resistance rectangle).
@@ -96,7 +162,7 @@ export const tradeRectOverlay: OverlayTemplate = {
  */
 export const hLineOverlay: OverlayTemplate = {
   name: 'hLine',
-  totalStep: 1,
+  totalStep: 2,
   needDefaultPointFigure: false,
   needDefaultXAxisFigure: false,
   needDefaultYAxisFigure: false,

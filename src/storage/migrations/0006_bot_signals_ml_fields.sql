@@ -1,0 +1,22 @@
+ALTER TABLE bot_signals ADD COLUMN source TEXT NOT NULL DEFAULT 'live';
+ALTER TABLE bot_signals ADD COLUMN backtest_run_id TEXT;
+ALTER TABLE bot_signals ADD COLUMN signal_type TEXT;
+ALTER TABLE bot_signals ADD COLUMN signal_timeframe TEXT;
+ALTER TABLE bot_signals ADD COLUMN signal_confidence INTEGER;
+ALTER TABLE bot_signals ADD COLUMN trend TEXT;
+ALTER TABLE bot_signals ADD COLUMN structure TEXT;
+ALTER TABLE bot_signals ADD COLUMN mtf_bias TEXT;
+ALTER TABLE bot_signals ADD COLUMN mtf_label TEXT;
+ALTER TABLE bot_signals ADD COLUMN atr REAL;
+ALTER TABLE bot_signals ADD COLUMN in_aoi INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE bot_signals ADD COLUMN fib_label TEXT;
+ALTER TABLE bot_signals ADD COLUMN trade_class TEXT;
+ALTER TABLE bot_signals ADD COLUMN zone_type TEXT;
+ALTER TABLE bot_signals ADD COLUMN pattern_type TEXT;
+ALTER TABLE bot_signals ADD COLUMN outcome TEXT;
+ALTER TABLE bot_signals ADD COLUMN close_price REAL;
+ALTER TABLE bot_signals ADD COLUMN close_time INTEGER;
+ALTER TABLE bot_signals ADD COLUMN pnl_pips REAL;
+ALTER TABLE bot_signals ADD COLUMN pnl_gbp REAL;
+
+CREATE INDEX IF NOT EXISTS idx_bot_signals_backtest_run ON bot_signals(backtest_run_id) WHERE backtest_run_id IS NOT NULL;

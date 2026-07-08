@@ -1,6 +1,5 @@
 import type { CurrencyPair } from "../types/market.ts";
 import type { Direction, RiskCalculation } from "../types/trading.ts";
-import { RISK_CONFIG } from "../config/index.ts";
 
 // Pip sizes
 const PIP_SIZE: Record<CurrencyPair, number> = {
@@ -64,6 +63,7 @@ export function calculateRisk(params: {
   target2?: number;
   accountSize?: number;
   maxRisk?: number;
+  minRewardRisk?: number;
 }): RiskCalculation {
   const {
     pair,
@@ -71,8 +71,9 @@ export function calculateRisk(params: {
     entryPrice,
     stopLoss,
     target1,
-    accountSize = RISK_CONFIG.accountSize,
-    maxRisk = RISK_CONFIG.maxLossPerTrade,
+    accountSize,
+    maxRisk,
+    minRewardRisk,
   } = params;
 
   const pipSize = PIP_SIZE[pair];
@@ -125,7 +126,7 @@ export function calculateRisk(params: {
   // R:R ratio
   const rewardRiskRatio = riskAmount > 0 ? rewardAmount / riskAmount : 0;
 
-  if (rewardRiskRatio < RISK_CONFIG.minRewardRisk) {
+  if (rewardRiskRatio < minRewardRisk) {
     return {
       pair, direction, entryPrice, stopLoss, target1,
       ...(params.target2 !== undefined ? { target2: params.target2 } : {}),
@@ -137,7 +138,7 @@ export function calculateRisk(params: {
       positionSizeUnits,
       accountRiskPercent: +((riskAmount / accountSize) * 100).toFixed(2),
       isValid: false,
-      rejectionReason: `R:R ratio ${rewardRiskRatio.toFixed(2)} is below minimum ${RISK_CONFIG.minRewardRisk}`,
+      rejectionReason: `R:R ratio ${rewardRiskRatio.toFixed(2)} is below minimum ${minRewardRisk}`,
     };
   }
 

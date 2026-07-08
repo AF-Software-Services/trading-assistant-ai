@@ -29,6 +29,21 @@ export interface SwingPoint {
   timestamp: number
 }
 
+export interface TrendlineOverlayLine {
+  type:         'resistance' | 'support'
+  p1Timestamp:  number
+  p2Timestamp:  number
+  p1Price:      number
+  p2Price:      number
+  currentPrice: number
+  touches:      number
+}
+
+export interface TrendlineOverlayResult {
+  resistanceLines: TrendlineOverlayLine[]
+  supportLines:    TrendlineOverlayLine[]
+}
+
 export interface AnalysisResult {
   pair: string
   trend: string
@@ -106,6 +121,17 @@ export async function getAnalysis(
     throw new Error(body.error ?? `Analysis fetch failed: ${res.status}`)
   }
   return res.json() as Promise<AnalysisResult>
+}
+
+export async function getTrendlines(
+  pair: string,
+  timeframe = '4H',
+): Promise<TrendlineOverlayResult> {
+  const encodedPair = encodeURIComponent(pair)
+  const res = await fetch(`${BASE}/api/v1/trendlines/${encodedPair}?timeframe=${timeframe}`)
+  if (!res.ok) return { resistanceLines: [], supportLines: [] }
+  const data = await res.json() as TrendlineOverlayResult
+  return { resistanceLines: data.resistanceLines ?? [], supportLines: data.supportLines ?? [] }
 }
 
 export async function saveTradeIdea(idea: TradeIdea): Promise<{ id: string; createdAt: number }> {

@@ -2,7 +2,9 @@ import { Hono } from "hono";
 import { handleMcpRequest } from "./mcp/server.ts";
 import { createApiRouter } from "./api/routes.ts";
 import { createCTraderRouter } from "./ctrader/routes.ts";
+import { createBotRouter }     from "./bot/routes.ts";
 import { handleCronTrigger } from "./scheduler/cron.ts";
+import { createBacktestRouter } from "./backtest/routes.ts";
 
 export interface Env {
   DB: D1Database;
@@ -42,6 +44,14 @@ app.route("/api/v1", apiRouter);
 // ── cTrader integration ───────────────────────────────────────────────────────
 const cTraderRouter = createCTraderRouter();
 app.route("/", cTraderRouter);
+
+// ── Bot ───────────────────────────────────────────────────────────────────────
+const botRouter = createBotRouter();
+app.route("/api/v1/bot", botRouter);
+
+// ── Backtest ──────────────────────────────────────────────────────────────────
+const backtestRouter = createBacktestRouter();
+app.route("/", backtestRouter);
 
 // ── Cloudflare Worker export ──────────────────────────────────────────────────
 export default {

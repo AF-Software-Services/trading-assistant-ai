@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { CTraderClient, SYMBOL_IDS } from './client.ts';
+import { CTraderClient, SYMBOL_IDS, diagnoseCTrader } from './client.ts';
 
 interface Env {
   KV: KVNamespace;
@@ -30,7 +30,7 @@ export function createCTraderRouter() {
     url.searchParams.set('client_id',     c.env.CTRADER_CLIENT_ID);
     url.searchParams.set('redirect_uri',  REDIRECT_URI);
     url.searchParams.set('response_type', 'code');
-    url.searchParams.set('scope',         'accounts');
+    url.searchParams.set('scope',         'trading');
     return c.redirect(url.toString());
   });
 
@@ -66,6 +66,26 @@ export function createCTraderRouter() {
   app.get('/api/v1/ctrader/status', async (c) => {
     const token = await c.env.KV.get('ctrader:access_token');
     return c.json({ connected: !!token, accountId: c.env.CTRADER_ACCOUNT_ID });
+  });
+
+  // ── Disconnect ───────────────────────────────────────────────────────────────
+  app.post('/api/v1/ctrader/disconnect', async (c) => {
+    await c.env.KV.delete('ctrader:access_token');
+    await c.env.KV.delete('ctrader:refresh_token');
+    return c.json({ disconnected: true });
+  });
+
+  // ── TCP socket diagnostic ─────────────────────────────────────────────────────
+  app.get('/api/v1/ctrader/diagnose', async (c) => {
+    const token = await c.env.KV.get('ctrader:access_token');
+    if (!token) return c.json({ ok: false, steps: ['No access token'], hasToken: false });
+    const result = await diagnoseCTrader({
+      clientId:     c.env.CTRADER_CLIENT_ID,
+      clientSecret: c.env.CTRADER_CLIENT_SECRET,
+      accessToken:  token,
+      accountId:    parseInt(c.env.CTRADER_ACCOUNT_ID),
+    });
+    return c.json(result);
   });
 
   // ── Open positions ────────────────────────────────────────────────────────────
@@ -111,10 +131,12 @@ export function createCTraderRouter() {
     if (!token) return c.json({ error: 'Not connected to cTrader' }, 401);
 
     const body = await c.req.json<{
-      pair:       string;
-      direction:  'buy' | 'sell';
-      lots:       number;
-      stopLoss?:  number;
+      pair:        string;
+      direction:   'buy' | 'sell';
+      lots:        number;
+      orderType?:  'market' | 'limit';
+      limitPrice?: number;
+      stopLoss?:   number;
       takeProfit?: number;
     }>();
 
@@ -125,7 +147,8 @@ export function createCTraderRouter() {
       await client(c.env, token).placeOrder({
         symbolId,
         direction:  body.direction,
-        volume:     Math.round(body.lots * 100),
+        lots:       body.lots,
+        limitPrice: body.orderType === 'limit' ? body.limitPrice : undefined,
         stopLoss:   body.stopLoss,
         takeProfit: body.takeProfit,
       });
