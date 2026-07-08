@@ -4,75 +4,34 @@ import type { BotInstance }                from "./bot-types.ts";
 import { createMarketDataProvider }        from "../providers/factory.ts";
 import { detectTrendlineSignal }           from "../engines/trendline.ts";
 import { storeTrendlineTrailState }        from "./monitor.ts";
-import { TradingService }                   from "../trading/service.ts";
+import { TradingService }                  from "../trading/service.ts";
 import { createJournalEntry, buildFeaturesFromContext } from "../storage/journal.ts";
+import type { BotSignal }                  from "./signal-store.ts";
+import {
+  getBotSettings,
+  saveBotSignal,
+  getBotSignals,
+  updateBotSignalStatus,
+} from "./signal-store.ts";
 
-export interface BotSettings {
-  mode:               "off" | "approval" | "autonomous";
-  minConfidenceScore: number;   // 0-100, default 65
-  minConfluence:      number;   // S/R levels required for AOI, default 2
-  maxOpenPositions:   number;   // default 2
-  dailyLossLimitPct:  number;   // default 2
-  allowedSessions:    string[]; // which UTC sessions to trade
-  pairs:              string[]; // subset of PHASE1_PAIRS to trade, empty = all
-}
-
-export interface BotSignal {
-  id:                 string;
-  botId:              string;
-  pair:               CurrencyPair;
-  direction:          "buy" | "sell";
-  entryPrice:         number;
-  stopLoss:           number;
-  takeProfit:         number;
-  lots:               number;
-  score:              number;
-  recommendationId:   string | null;
-  reasons:            string[];
-  status:             "pending" | "approved" | "rejected" | "executed" | "expired" | "failed";
-  createdAt:          number;
-  expiresAt:          number;
-  executedAt:         number | null;
-  ctraderPositionId:  number | null;
-  journalId:          string | null;
-  rejectionReason:    string | null;
-  errorMessage:       string | null;
-  // Source
-  source:             'live' | 'backtest';
-  backtestRunId:      string | null;
-  // ML features
-  signalType:         string | null;
-  signalTimeframe:    string | null;
-  signalConfidence:   number | null;
-  trend:              string | null;
-  structure:          string | null;
-  mtfBias:            string | null;
-  mtfLabel:           string | null;
-  atr:                number | null;
-  inAoi:              boolean;
-  fibLabel:           string | null;
-  tradeClass:         string | null;
-  zoneType:           string | null;
-  patternType:        string | null;
-  // Outcome (filled when trade closes)
-  outcome:            'tp' | 'sl' | 'expired' | null;
-  closePrice:         number | null;
-  closeTime:          number | null;
-  pnlPips:            number | null;
-  pnlGbp:             number | null;
-}
+// Re-export store types and functions so existing callers need no import changes.
+export type { BotSignal, BotSettings } from "./signal-store.ts";
+export {
+  getBotSettings, saveBotSettings,
+  getBotSignals,  updateBotSignalStatus,
+  recordBotSignalOutcome, saveBotSignal,
+} from "./signal-store.ts";
 
 export interface BotRunResult {
-  pairsScanned:   number;
-  signalsFound:   number;
-  signalsQueued:  number;  // approval mode
-  signalsExecuted:number;  // autonomous mode
-  signalsFailed:  number;
-  errors:         string[];
-  warnings?:      string[];
+  pairsScanned:    number;
+  signalsFound:    number;
+  signalsQueued:   number;
+  signalsExecuted: number;
+  signalsFailed:   number;
+  errors:          string[];
+  warnings?:       string[];
 }
 
-// Approximate GBP pip value per standard lot — conservative, slightly under real value
 const PIP_VALUE_GBP: Record<string, number> = {
   "EUR/USD": 7.50,
   "GBP/USD": 7.50,
@@ -87,11 +46,10 @@ function pipFactor(pair: string): number {
 }
 
 export function calcLots(riskAmountGBP: number, pair: string, entryPrice: number, stopLoss: number): number {
-  const stopPips  = Math.abs(entryPrice - stopLoss) * pipFactor(pair);
-  const pipVal    = PIP_VALUE_GBP[pair] ?? 7.50;
+  const stopPips = Math.abs(entryPrice - stopLoss) * pipFactor(pair);
+  const pipVal   = PIP_VALUE_GBP[pair] ?? 7.50;
   if (stopPips <= 0 || pipVal <= 0) return 0.01;
   const raw = riskAmountGBP / (stopPips * pipVal);
-  // Round down to 0.01 lot precision, clamp between 0.01 and 10 lots
   return Math.max(0.01, Math.min(10, Math.floor(raw * 100) / 100));
 }
 
@@ -103,202 +61,6 @@ function getCurrentSession(): string {
   if (h >= 13 && h < 17) return "ny";
   if (h >= 17 && h < 21) return "ny_late";
   return "asian";
-}
-
-// ── KV helpers ────────────────────────────────────────────────────────────────
-
-export async function getBotSettings(kv: KVNamespace): Promise<BotSettings> {
-  const saved = await kv.get("bot:settings", "json") as Partial<BotSettings> | null;
-  return {
-    mode:              saved?.mode              ?? "off",
-    minConfidenceScore: saved?.minConfidenceScore ?? 60,
-    minConfluence:      saved?.minConfluence      ?? 2,
-    maxOpenPositions:  saved?.maxOpenPositions  ?? 2,
-    dailyLossLimitPct: saved?.dailyLossLimitPct ?? 2,
-    allowedSessions:   saved?.allowedSessions   ?? ["london", "ny", "overlap_london_ny"],
-    pairs:             saved?.pairs             ?? [],
-  };
-}
-
-export async function saveBotSettings(kv: KVNamespace, settings: Partial<BotSettings>): Promise<BotSettings> {
-  const current = await getBotSettings(kv);
-  const updated = { ...current, ...settings };
-  await kv.put("bot:settings", JSON.stringify(updated));
-  return updated;
-}
-
-// ── D1 helpers ────────────────────────────────────────────────────────────────
-
-export async function saveBotSignal(db: D1Database, signal: BotSignal): Promise<void> {
-  await db.prepare(
-    `INSERT INTO bot_signals
-       (id, bot_id, pair, direction, entry_price, stop_loss, take_profit, lots, score,
-        recommendation_id, reasons_json, status, created_at, expires_at,
-        executed_at, ctrader_position_id, journal_id, rejection_reason, error_message,
-        source, backtest_run_id,
-        signal_type, signal_timeframe, signal_confidence,
-        trend, structure, mtf_bias, mtf_label, atr, in_aoi,
-        fib_label, trade_class, zone_type, pattern_type,
-        outcome, close_price, close_time, pnl_pips, pnl_gbp)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-             ?, ?,
-             ?, ?, ?,
-             ?, ?, ?, ?, ?, ?,
-             ?, ?, ?, ?,
-             ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
-       status               = excluded.status,
-       executed_at          = excluded.executed_at,
-       ctrader_position_id  = excluded.ctrader_position_id,
-       journal_id           = excluded.journal_id,
-       rejection_reason     = excluded.rejection_reason,
-       error_message        = excluded.error_message,
-       outcome              = excluded.outcome,
-       close_price          = excluded.close_price,
-       close_time           = excluded.close_time,
-       pnl_pips             = excluded.pnl_pips,
-       pnl_gbp              = excluded.pnl_gbp`
-  ).bind(
-    signal.id, signal.botId, signal.pair, signal.direction,
-    signal.entryPrice, signal.stopLoss, signal.takeProfit,
-    signal.lots, signal.score,
-    signal.recommendationId ?? null,
-    JSON.stringify(signal.reasons),
-    signal.status,
-    signal.createdAt, signal.expiresAt,
-    signal.executedAt ?? null,
-    signal.ctraderPositionId ?? null,
-    signal.journalId ?? null,
-    signal.rejectionReason ?? null,
-    signal.errorMessage ?? null,
-    signal.source,
-    signal.backtestRunId ?? null,
-    signal.signalType ?? null,
-    signal.signalTimeframe ?? null,
-    signal.signalConfidence ?? null,
-    signal.trend ?? null,
-    signal.structure ?? null,
-    signal.mtfBias ?? null,
-    signal.mtfLabel ?? null,
-    signal.atr ?? null,
-    signal.inAoi ? 1 : 0,
-    signal.fibLabel ?? null,
-    signal.tradeClass ?? null,
-    signal.zoneType ?? null,
-    signal.patternType ?? null,
-    signal.outcome ?? null,
-    signal.closePrice ?? null,
-    signal.closeTime ?? null,
-    signal.pnlPips ?? null,
-    signal.pnlGbp ?? null,
-  ).run();
-}
-
-export async function recordBotSignalOutcome(
-  db: D1Database,
-  id: string,
-  outcome: 'tp' | 'sl' | 'expired',
-  closePrice: number,
-  closeTime: number,
-  pnlPips: number,
-  pnlGbp: number,
-): Promise<void> {
-  await db.prepare(
-    `UPDATE bot_signals
-     SET outcome     = ?,
-         close_price = ?,
-         close_time  = ?,
-         pnl_pips    = ?,
-         pnl_gbp     = ?
-     WHERE id = ?`
-  ).bind(outcome, closePrice, closeTime, pnlPips, pnlGbp, id).run();
-}
-
-export async function getBotSignals(
-  db: D1Database,
-  opts: { status?: string; limit?: number; source?: string; botId?: string } = {}
-): Promise<BotSignal[]> {
-  const conditions: string[] = [];
-  const params: unknown[] = [];
-  if (opts.status) { conditions.push("status = ?"); params.push(opts.status); }
-  if (opts.source) { conditions.push("source = ?"); params.push(opts.source); }
-  if (opts.botId)  { conditions.push("bot_id = ?"); params.push(opts.botId); }
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-  params.push(opts.limit ?? 50);
-  const rows = await db.prepare(
-    `SELECT * FROM bot_signals ${where} ORDER BY created_at DESC LIMIT ?`
-  ).bind(...params).all<Record<string, unknown>>();
-  return rows.results.map(rowToSignal);
-}
-
-export async function updateBotSignalStatus(
-  db: D1Database,
-  id: string,
-  status: BotSignal["status"],
-  extra: Partial<Pick<BotSignal, "executedAt" | "ctraderPositionId" | "journalId" | "rejectionReason" | "errorMessage">> = {}
-): Promise<void> {
-  await db.prepare(
-    `UPDATE bot_signals
-     SET status              = ?,
-         executed_at         = COALESCE(?, executed_at),
-         ctrader_position_id = COALESCE(?, ctrader_position_id),
-         journal_id          = COALESCE(?, journal_id),
-         rejection_reason    = COALESCE(?, rejection_reason),
-         error_message       = COALESCE(?, error_message)
-     WHERE id = ?`
-  ).bind(
-    status,
-    extra.executedAt          ?? null,
-    extra.ctraderPositionId   ?? null,
-    extra.journalId           ?? null,
-    extra.rejectionReason     ?? null,
-    extra.errorMessage        ?? null,
-    id
-  ).run();
-}
-
-function rowToSignal(row: Record<string, unknown>): BotSignal {
-  return {
-    id:                row["id"]                   as string,
-    botId:             (row["bot_id"]              as string | null) ?? "legacy",
-    pair:              row["pair"]                 as CurrencyPair,
-    direction:         row["direction"]            as "buy" | "sell",
-    entryPrice:        row["entry_price"]          as number,
-    stopLoss:          row["stop_loss"]            as number,
-    takeProfit:        row["take_profit"]          as number,
-    lots:              row["lots"]                 as number,
-    score:             row["score"]                as number,
-    recommendationId:  (row["recommendation_id"]  as string | null) ?? null,
-    reasons:           JSON.parse(row["reasons_json"] as string) as string[],
-    status:            row["status"]               as BotSignal["status"],
-    createdAt:         row["created_at"]           as number,
-    expiresAt:         row["expires_at"]           as number,
-    executedAt:        (row["executed_at"]         as number | null) ?? null,
-    ctraderPositionId: (row["ctrader_position_id"] as number | null) ?? null,
-    journalId:         (row["journal_id"]          as string | null) ?? null,
-    rejectionReason:   (row["rejection_reason"]    as string | null) ?? null,
-    errorMessage:      (row["error_message"]       as string | null) ?? null,
-    source:            ((row["source"] as string | null) ?? "live") as 'live' | 'backtest',
-    backtestRunId:     (row["backtest_run_id"]     as string | null) ?? null,
-    signalType:        (row["signal_type"]         as string | null) ?? null,
-    signalTimeframe:   (row["signal_timeframe"]    as string | null) ?? null,
-    signalConfidence:  (row["signal_confidence"]   as number | null) ?? null,
-    trend:             (row["trend"]               as string | null) ?? null,
-    structure:         (row["structure"]           as string | null) ?? null,
-    mtfBias:           (row["mtf_bias"]            as string | null) ?? null,
-    mtfLabel:          (row["mtf_label"]           as string | null) ?? null,
-    atr:               (row["atr"]                 as number | null) ?? null,
-    inAoi:             !!(row["in_aoi"]            as number | null),
-    fibLabel:          (row["fib_label"]           as string | null) ?? null,
-    tradeClass:        (row["trade_class"]         as string | null) ?? null,
-    zoneType:          (row["zone_type"]           as string | null) ?? null,
-    patternType:       (row["pattern_type"]        as string | null) ?? null,
-    outcome:           (row["outcome"]             as 'tp' | 'sl' | 'expired' | null) ?? null,
-    closePrice:        (row["close_price"]         as number | null) ?? null,
-    closeTime:         (row["close_time"]          as number | null) ?? null,
-    pnlPips:           (row["pnl_pips"]            as number | null) ?? null,
-    pnlGbp:            (row["pnl_gbp"]             as number | null) ?? null,
-  };
 }
 
 // ── Execute a signal via cTrader ──────────────────────────────────────────────
@@ -318,15 +80,14 @@ export async function executeSignal(
     takeProfit: signal.takeProfit,
   });
 
-  // Log to journal with full feature capture
   const features = buildFeaturesFromContext({
-    signalType:     signal.reasons[0] ?? "bot_signal",
-    rrRatio:        Math.abs(signal.takeProfit - signal.entryPrice) / Math.abs(signal.entryPrice - signal.stopLoss),
-    stopPips:       Math.abs(signal.entryPrice - signal.stopLoss) * pipFactor(signal.pair),
-    totalScore:     signal.score,
-    aoiConfirmed:   true,  // bot only trades AOI-confirmed setups
-    candles4h:      [],
-    candlesD:       [],
+    signalType:   signal.reasons[0] ?? "bot_signal",
+    rrRatio:      Math.abs(signal.takeProfit - signal.entryPrice) / Math.abs(signal.entryPrice - signal.stopLoss),
+    stopPips:     Math.abs(signal.entryPrice - signal.stopLoss) * pipFactor(signal.pair),
+    totalScore:   signal.score,
+    aoiConfirmed: true,
+    candles4h:    [],
+    candlesD:     [],
   });
 
   const now = new Date();
@@ -346,7 +107,6 @@ export async function executeSignal(
     createdAt:        Date.now(),
   });
 
-  // cooldown key uses signal.botId so each bot has its own per-pair cooldown
   await kv.put(`bot:last_executed:${signal.botId}:${signal.pair}`, String(Date.now()));
 
   await updateBotSignalStatus(db, signal.id, "executed", {
@@ -374,7 +134,6 @@ export async function runBotScan(env: {
     signalsQueued: 0, signalsExecuted: 0, signalsFailed: 0, errors: [],
   };
 
-  // Resolve settings: prefer botInstance, fall back to legacy KV settings
   let mode: "off" | "approval" | "autonomous";
   let minConfidenceScore: number;
   let minConfluence: number;
@@ -405,7 +164,6 @@ export async function runBotScan(env: {
     return result;
   }
 
-  // Session gate (skipped for manual scans)
   const session = getCurrentSession();
   if (!env.skipSessionGate) {
     const settings = await getBotSettings(env.KV);
@@ -415,7 +173,6 @@ export async function runBotScan(env: {
     }
   }
 
-  // Risk settings — bot-level overrides system-level
   const riskSettings = await env.KV.get("user:risk_settings", "json") as
     { accountBalance?: number; riskPercent?: number; rewardRisk?: number } | null;
   const accountBalance = riskSettings?.accountBalance ?? 1000;
@@ -424,7 +181,6 @@ export async function runBotScan(env: {
   const rrRatio        = (botSettings["rewardRisk"]  as number | undefined) ?? riskSettings?.rewardRisk  ?? 1.5;
   const riskAmount     = accountBalance * riskPercent / 100;
 
-  // cTrader connection — required for autonomous, optional for approval
   const trading = await TradingService.tryConnect(env);
   let openPositionPairs: Set<string> = new Set();
   let openCount = 0;
@@ -447,7 +203,6 @@ export async function runBotScan(env: {
     return result;
   }
 
-  // Cancel and expire old pending signals that had limit orders placed
   if (trading) {
     const expiring = await env.DB.prepare(
       `SELECT id, ctrader_position_id FROM bot_signals
@@ -462,7 +217,6 @@ export async function runBotScan(env: {
     }
   }
 
-  // Expire pending signals that were never executed (approval mode, not yet approved)
   await env.DB.prepare(
     `UPDATE bot_signals SET status = 'expired'
      WHERE status = 'pending' AND expires_at < ?`
@@ -470,8 +224,8 @@ export async function runBotScan(env: {
 
   const provider = createMarketDataProvider({
     provider: env.MARKET_DATA_PROVIDER,
-    apiKey: env.TWELVE_DATA_API_KEY || undefined,
-    kv: env.KV,
+    apiKey:   env.TWELVE_DATA_API_KEY || undefined,
+    kv:       env.KV,
   });
 
   const targetPairs = targetPairsOverride ?? (PHASE1_PAIRS as CurrencyPair[]);
@@ -480,17 +234,12 @@ export async function runBotScan(env: {
     result.pairsScanned++;
 
     try {
-      // Skip if already have a position on this pair
       if (openPositionPairs.has(pair)) continue;
-
-      // Skip if at max positions (2 per bot)
       if (openCount >= 2) break;
 
-      // Check cooldown — don't trade same pair twice in 4 hours (per bot)
       const lastExecuted = await env.KV.get(`bot:last_executed:${botId}:${pair}`);
       if (lastExecuted && Date.now() - parseInt(lastExecuted) < 4 * 60 * 60 * 1000) continue;
 
-      // ── Trendline Bot ───────────────────────────────────────────────────────
       if (botType === "trendline") {
         const [candles4H, candlesD] = await Promise.all([
           provider.getCandles(pair, "4H",   200),
@@ -499,10 +248,8 @@ export async function runBotScan(env: {
         const tlSig = detectTrendlineSignal(candles4H, rrRatio, 5, candlesD);
 
         if (!tlSig) {
-          // Secondary pass without daily bias — distinguishes "no pattern" from "bias filtered"
           const tlNoBias = detectTrendlineSignal(candles4H, rrRatio, 5, undefined);
           if (tlNoBias) {
-            // Pattern exists but filtered by daily bias — save as rejected for review
             await saveBotSignal(env.DB, {
               id: crypto.randomUUID(), botId, pair,
               direction:         tlNoBias.direction,
@@ -592,7 +339,6 @@ export async function runBotScan(env: {
             if (!trading) throw new Error("No cTrader token");
             await saveBotSignal(env.DB, signal);
             await executeSignal(signal, env.DB, env.KV, trading);
-            // Store safety line so monitor can project it forward each tick
             await storeTrendlineTrailState(env.KV, signal.id, tlSig.safetyLine, Date.now(), signal.stopLoss);
             openCount++;
             openPositionPairs.add(pair);
@@ -605,7 +351,7 @@ export async function runBotScan(env: {
           }
         }
 
-        continue; // next pair
+        continue;
       }
     } catch (e) {
       result.errors.push(`${pair}: ${(e as Error).message}`);
