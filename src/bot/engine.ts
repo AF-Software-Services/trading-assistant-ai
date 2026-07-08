@@ -18,7 +18,7 @@ import {
 export type { BotSignal, BotSettings } from "./signal-store.ts";
 export {
   getBotSettings, saveBotSettings,
-  getBotSignals,  updateBotSignalStatus,
+  getBotSignal,   getBotSignals,  updateBotSignalStatus,
   recordBotSignalOutcome, saveBotSignal,
 } from "./signal-store.ts";
 

@@ -18,14 +18,6 @@ function pipFactor(pair: string): number {
   return pair.includes("JPY") ? 100 : 10000;
 }
 
-function generateUUID(): string {
-  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === "x" ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-}
 
 export interface BacktestConfig {
   pairs: string[];
@@ -311,7 +303,7 @@ export async function runTrendlineBacktest(
       const pnlGbp = outcomeResult.pnlPips * lots * pipVal;
 
       const signal: BotSignal = {
-        id:               generateUUID(),
+        id:               crypto.randomUUID(),
         botId:            "backtest-trendline",
         pair:             pair as CurrencyPair,
         direction:        sig.direction,
@@ -360,4 +352,58 @@ export async function runTrendlineBacktest(
   }
 
   return { signals: allSignals, diagnostics: rejections, log };
+}
+
+export function buildSummary(
+  signals:     BotSignal[],
+  diagnostics: Record<string, number> = {},
+  log:         string[] = [],
+) {
+  const executed  = signals.filter(s => s.status === 'executed');
+  const completed = executed.filter(s => s.outcome !== null);
+  const rejected  = signals.filter(s => s.status === 'rejected').length;
+  const wins      = completed.filter(s => s.outcome === "tp").length;
+  const losses    = completed.filter(s => s.outcome === "sl").length;
+  const totalPnl  = completed.reduce((sum, s) => sum + (s.pnlGbp ?? 0), 0);
+
+  let peak = 0, cumPnl = 0, maxDrawdown = 0;
+  for (const s of completed) {
+    cumPnl += s.pnlGbp ?? 0;
+    if (cumPnl > peak) peak = cumPnl;
+    const dd = peak - cumPnl;
+    if (dd > maxDrawdown) maxDrawdown = dd;
+  }
+
+  const pnls     = completed.map(s => s.pnlGbp ?? 0);
+  const mean     = pnls.length > 0 ? pnls.reduce((a, b) => a + b, 0) / pnls.length : 0;
+  const variance = pnls.length > 1
+    ? pnls.reduce((sum, p) => sum + (p - mean) ** 2, 0) / (pnls.length - 1)
+    : 0;
+  const sharpe = variance > 0 ? (mean / Math.sqrt(variance)) * Math.sqrt(252) : 0;
+
+  const pairs  = [...new Set(executed.map(s => s.pair))];
+  const byPair: Record<string, { trades: number; wins: number; losses: number; pnlGbp: number }> = {};
+  for (const pair of pairs) {
+    const pt = completed.filter(s => s.pair === pair);
+    byPair[pair] = {
+      trades: pt.length,
+      wins:   pt.filter(s => s.outcome === "tp").length,
+      losses: pt.filter(s => s.outcome === "sl").length,
+      pnlGbp: +pt.reduce((sum, s) => sum + (s.pnlGbp ?? 0), 0).toFixed(2),
+    };
+  }
+
+  return {
+    totalTrades:     completed.length,
+    wins,
+    losses,
+    winRate:         completed.length > 0 ? +(wins / completed.length * 100).toFixed(1) : 0,
+    totalPnl:        +totalPnl.toFixed(2),
+    maxDrawdown:     +maxDrawdown.toFixed(2),
+    sharpe:          +sharpe.toFixed(2),
+    byPair,
+    diagnostics,
+    rejectedSignals: rejected,
+    log,
+  };
 }

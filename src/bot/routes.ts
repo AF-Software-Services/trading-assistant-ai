@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import {
+  getBotSignal,
   getBotSignals,
   updateBotSignalStatus,
   executeSignal,
@@ -143,54 +144,29 @@ export function createBotRouter() {
 
   // ── POST /api/v1/bot/signals/:id/approve ─────────────────────────────────────
   app.post("/signals/:id/approve", async (c) => {
-    const id = c.req.param("id");
-    let trading: import("../trading/service.ts").TradingService;
+    const id     = c.req.param("id");
+    const signal = await getBotSignal(c.env.DB, id);
+    if (!signal) return c.json({ error: "Signal not found" }, 404);
+    if (signal.status !== "pending") return c.json({ error: `Signal is ${signal.status}, not pending` }, 409);
+    if (signal.expiresAt < Date.now()) {
+      await updateBotSignalStatus(c.env.DB, id, "expired");
+      return c.json({ error: "Signal has expired" }, 410);
+    }
+
+    let trading: TradingService;
     try {
       trading = await TradingService.connect(c.env);
     } catch {
       return c.json({ error: "cTrader not connected" }, 401);
     }
 
-    const rows = await c.env.DB.prepare(
-      "SELECT * FROM bot_signals WHERE id = ?"
-    ).bind(id).first<Record<string, unknown>>();
-
-    if (!rows) return c.json({ error: "Signal not found" }, 404);
-    if (rows["status"] !== "pending") {
-      return c.json({ error: `Signal is ${rows["status"]}, not pending` }, 409);
-    }
-    if ((rows["expires_at"] as number) < Date.now()) {
-      await updateBotSignalStatus(c.env.DB, id, "expired");
-      return c.json({ error: "Signal has expired" }, 410);
-    }
-
-    const signalObj = {
-      id,
-      pair:              rows["pair"]            as any,
-      direction:         rows["direction"]        as "buy" | "sell",
-      entryPrice:        rows["entry_price"]      as number,
-      stopLoss:          rows["stop_loss"]        as number,
-      takeProfit:        rows["take_profit"]      as number,
-      lots:              rows["lots"]             as number,
-      score:             rows["score"]            as number,
-      recommendationId:  rows["recommendation_id"] as string | null,
-      reasons:           JSON.parse(rows["reasons_json"] as string),
-      status:            "pending" as const,
-      createdAt:         rows["created_at"]       as number,
-      expiresAt:         rows["expires_at"]       as number,
-      executedAt:        null, ctraderPositionId: null,
-      journalId:         null, rejectionReason:   null, errorMessage: null,
-    };
-
     await updateBotSignalStatus(c.env.DB, id, "approved");
 
     try {
-      await executeSignal(signalObj, c.env.DB, c.env.KV, trading);
+      await executeSignal(signal, c.env.DB, c.env.KV, trading);
       return c.json({ success: true, id });
     } catch (e) {
-      await updateBotSignalStatus(c.env.DB, id, "failed", {
-        errorMessage: (e as Error).message,
-      });
+      await updateBotSignalStatus(c.env.DB, id, "failed", { errorMessage: (e as Error).message });
       return c.json({ error: (e as Error).message }, 502);
     }
   });

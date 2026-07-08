@@ -161,6 +161,13 @@ export async function recordBotSignalOutcome(
   ).bind(outcome, closePrice, closeTime, pnlPips, pnlGbp, id).run();
 }
 
+export async function getBotSignal(db: D1Database, id: string): Promise<BotSignal | null> {
+  const row = await db.prepare(
+    "SELECT * FROM bot_signals WHERE id = ?"
+  ).bind(id).first<Record<string, unknown>>();
+  return row ? rowToSignal(row) : null;
+}
+
 export async function getBotSignals(
   db: D1Database,
   opts: { status?: string; limit?: number; source?: string; botId?: string } = {}
