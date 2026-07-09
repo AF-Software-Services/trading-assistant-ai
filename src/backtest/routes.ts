@@ -24,11 +24,13 @@ export function createBacktestRouter() {
     ]);
     if (!botInstance) return c.json({ error: "Bot not found" }, 404);
 
-    // Use the bot's exact settings — no fallbacks. A backtest must be identical to a live run.
-    const accountBalance    = riskRaw?.accountBalance ?? 1000;
-    const riskPercent       = botInstance.settings["riskPercent"]        as number;
-    const rewardRisk        = botInstance.settings["rewardRisk"]         as number;
-    const minScore          = botInstance.settings["minConfidenceScore"] as number;
+    // Execution constraints come from the bot with no fallback — must match the live run exactly.
+    // Sizing params (riskPercent, rewardRisk) fall back to global risk settings for bots that
+    // pre-date those fields being saved on the bot card.
+    const accountBalance     = riskRaw?.accountBalance ?? 1000;
+    const riskPercent        = (botInstance.settings["riskPercent"]  as number | undefined) ?? (riskRaw?.riskPercent  ?? 1);
+    const rewardRisk         = (botInstance.settings["rewardRisk"]   as number | undefined) ?? (riskRaw?.rewardRisk   ?? 1.5);
+    const minScore           = botInstance.settings["minConfidenceScore"] as number;
     const maxOpenPositions   = botInstance.settings["maxOpenPositions"]   as number;
     const allowDuplicatePairs = botInstance.settings["allowDuplicatePairs"] as boolean;
     const pairs          = body.pairs;

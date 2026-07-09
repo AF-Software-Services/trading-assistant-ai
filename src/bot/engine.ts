@@ -182,13 +182,12 @@ export async function runBotScan(env: {
   const riskSettings = await env.KV.get("user:risk_settings", "json") as
     { accountBalance?: number; riskPercent?: number; rewardRisk?: number } | null;
   const accountBalance = riskSettings?.accountBalance ?? 1000;
-  // When a bot instance is present, use its settings exactly — no fallbacks.
-  // The live run and the backtest must use identical parameters.
+  // Bot-level sizing overrides global risk settings; fall back to global if not yet saved on the bot.
   const riskPercent = env.botInstance
-    ? env.botInstance.settings["riskPercent"] as number
+    ? (env.botInstance.settings["riskPercent"] as number | undefined) ?? (riskSettings?.riskPercent ?? 1)
     : riskSettings?.riskPercent ?? 1;
   const rrRatio = env.botInstance
-    ? env.botInstance.settings["rewardRisk"] as number
+    ? (env.botInstance.settings["rewardRisk"] as number | undefined) ?? (riskSettings?.rewardRisk ?? 1.5)
     : riskSettings?.rewardRisk ?? 1.5;
   const riskAmount     = accountBalance * riskPercent / 100;
 
