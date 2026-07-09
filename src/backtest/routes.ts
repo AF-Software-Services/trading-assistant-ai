@@ -43,7 +43,7 @@ export function createBacktestRouter() {
       `INSERT INTO backtest_runs (id, started_at, status, config_json) VALUES (?, ?, 'running', ?)`
     ).bind(runId, startedAt, JSON.stringify(body)).run();
 
-    c.executionCtx.waitUntil((async () => {
+    const runBacktest = async () => {
       try {
         const { signals, diagnostics, log } = await runTrendlineBacktest(
           { pairs, fromMs, toMs, accountBalance, riskPercent, rewardRisk, minScore, maxOpenPositions, allowDuplicatePairs },
@@ -52,7 +52,6 @@ export function createBacktestRouter() {
           c.env.KV,
         );
 
-        // Assign runId and save each signal through the bot engine's write path
         for (const signal of signals) {
           signal.backtestRunId = runId;
           await saveBotSignal(c.env.DB, signal);
@@ -69,7 +68,15 @@ export function createBacktestRouter() {
           `UPDATE backtest_runs SET status='failed', completed_at=?, error=? WHERE id=?`
         ).bind(Date.now(), msg, runId).run();
       }
-    })());
+    };
+
+    // In dev mode run synchronously — waitUntil() is cancelled too early by wrangler dev --remote.
+    // In production use waitUntil() so the HTTP response returns immediately.
+    if (c.env.DEV_MODE === 'true') {
+      await runBacktest();
+    } else {
+      c.executionCtx.waitUntil(runBacktest());
+    }
 
     return c.json({ runId });
   });

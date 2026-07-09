@@ -15,6 +15,7 @@ export interface Env {
   CTRADER_CLIENT_ID: string;
   CTRADER_CLIENT_SECRET: string;
   CTRADER_ACCOUNT_ID: string;
+  DEV_MODE?: string;
 }
 
 const app = new Hono<{ Bindings: Env }>();
