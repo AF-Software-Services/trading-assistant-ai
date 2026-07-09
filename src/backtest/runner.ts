@@ -196,6 +196,12 @@ export async function runTrendlineBacktest(
   const fetchFrom  = new Date(config.fromMs - lookbackMs).toISOString().slice(0, 10);
   const fetchTo    = new Date(config.toMs).toISOString().slice(0, 10);
 
+  // Shared across all pairs — mirrors live bot constraints exactly.
+  // openPositions tracks concurrent trades; lastSignalMs enforces the 4H cooldown per pair.
+  const openPositions: Array<{ pair: string; closeTime: number }> = [];
+  const lastSignalMs: Record<string, number> = {};
+  const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+
   for (const pair of config.pairs) {
     progress(`Fetching data for ${pair}…`);
 
@@ -230,9 +236,6 @@ export async function runTrendlineBacktest(
     const inPeriodCount = periodEnd - periodStart;
     progress(`${pair}: ${inPeriodCount} 4H candles in test period`);
 
-    // Cooldown: 20 bars between signals in the same direction on the same pair
-    const lastSignalBar: Record<string, number> = {};
-
     for (let i = 0; i < inPeriodCount; i++) {
       // Yield every 20 bars to avoid CPU watchdog
       if (i % 20 === 0 && i > 0) await new Promise(r => setTimeout(r, 0));
@@ -256,6 +259,27 @@ export async function runTrendlineBacktest(
         continue;
       }
 
+      // ── Live-bot constraints (must match runBotScan exactly) ──────────────
+      // Expire closed positions before checking capacity
+      for (let j = openPositions.length - 1; j >= 0; j--) {
+        if (openPositions[j]!.closeTime <= cutoff) openPositions.splice(j, 1);
+      }
+      // No second position on the same pair
+      if (openPositions.some(p => p.pair === pair)) {
+        rejections["position_open"] = (rejections["position_open"] ?? 0) + 1;
+        continue;
+      }
+      // Max 2 concurrent positions across all pairs
+      if (openPositions.length >= 2) {
+        rejections["max_positions"] = (rejections["max_positions"] ?? 0) + 1;
+        continue;
+      }
+      // 4-hour cooldown per pair (matches live bot's KV cooldown key)
+      if (cutoff - (lastSignalMs[pair] ?? 0) < FOUR_HOURS_MS) {
+        rejections["cooldown"] = (rejections["cooldown"] ?? 0) + 1;
+        continue;
+      }
+
       const sig = detectTrendlineSignal(history, config.rewardRisk, 5, dHistory);
       if (!sig) {
         // Secondary pass without daily bias — distinguishes "no pattern" from "bias filtered"
@@ -272,15 +296,6 @@ export async function runTrendlineBacktest(
         rejections["score_too_low"] = (rejections["score_too_low"] ?? 0) + 1;
         continue;
       }
-
-      // Cooldown: 20 bars between same-direction signals on the same pair
-      const cooldownKey = `${pair}:${sig.direction}`;
-      const lastBar = lastSignalBar[cooldownKey] ?? -999;
-      if (i - lastBar < 20) {
-        rejections["cooldown"] = (rejections["cooldown"] ?? 0) + 1;
-        continue;
-      }
-      lastSignalBar[cooldownKey] = i;
 
       const lots = calcLots(riskAmount, pair, sig.entryPrice, sig.stopLoss);
       if (lots <= 0) continue;
@@ -299,6 +314,10 @@ export async function runTrendlineBacktest(
         { pair, direction: sig.direction, entryPrice: sig.entryPrice, stopLoss: sig.stopLoss, takeProfit: sig.takeProfit, safetyLine: safetyLineParams },
         forwardCandles,
       );
+
+      // Register position and cooldown — mirrors what runBotScan writes to KV
+      openPositions.push({ pair, closeTime: outcomeResult.closeTime });
+      lastSignalMs[pair] = cutoff;
 
       const pnlGbp = outcomeResult.pnlPips * lots * pipVal;
 
