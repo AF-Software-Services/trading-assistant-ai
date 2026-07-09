@@ -1306,6 +1306,22 @@ function initBot(): void {
             data-bot-id="${bot.id}" data-key="rewardRisk" />
           <span style="font-size:10px;color:var(--muted)">:1</span>
         </div>
+      </div>
+      <div class="bot-card-row">
+        <span class="bot-card-label">Max Positions</span>
+        <div class="bot-card-setting">
+          <input type="number" min="1" max="20" step="1"
+            value="${bot.settings.maxOpenPositions ?? 2}"
+            data-bot-id="${bot.id}" data-key="maxOpenPositions" />
+          <span style="font-size:10px;color:var(--muted)">concurrent</span>
+        </div>
+        <span class="bot-card-label" style="margin-left:12px">Allow Duplicates</span>
+        <div class="bot-card-setting" style="align-items:center;gap:6px">
+          <input type="checkbox"
+            ${bot.settings.allowDuplicatePairs ? 'checked' : ''}
+            data-bot-id="${bot.id}" data-key="allowDuplicatePairs" />
+          <span style="font-size:10px;color:var(--muted)">same pair twice</span>
+        </div>
       </div>`
 
     const settingFields = bot.type === 'structure' ? `
@@ -1425,7 +1441,7 @@ function initBot(): void {
         const pairs = allActive ? [] : Array.from(activePills).map(p => p.dataset.pair!)
         const settings: Record<string, unknown> = {}
         card.querySelectorAll<HTMLInputElement>('[data-key]').forEach(inp => {
-          settings[inp.dataset.key!] = Number(inp.value)
+          settings[inp.dataset.key!] = inp.type === 'checkbox' ? inp.checked : Number(inp.value)
         })
         const res = await fetch(`/api/v1/bot/bots/${botId}`, {
           method: 'PUT',
