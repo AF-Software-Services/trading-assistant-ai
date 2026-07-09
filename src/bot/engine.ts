@@ -176,9 +176,14 @@ export async function runBotScan(env: {
   const riskSettings = await env.KV.get("user:risk_settings", "json") as
     { accountBalance?: number; riskPercent?: number; rewardRisk?: number } | null;
   const accountBalance = riskSettings?.accountBalance ?? 1000;
-  const botSettings    = env.botInstance?.settings ?? {};
-  const riskPercent    = (botSettings["riskPercent"] as number | undefined) ?? riskSettings?.riskPercent ?? 1;
-  const rrRatio        = (botSettings["rewardRisk"]  as number | undefined) ?? riskSettings?.rewardRisk  ?? 1.5;
+  // When a bot instance is present, use its settings exactly — no fallbacks.
+  // The live run and the backtest must use identical parameters.
+  const riskPercent = env.botInstance
+    ? env.botInstance.settings["riskPercent"] as number
+    : riskSettings?.riskPercent ?? 1;
+  const rrRatio = env.botInstance
+    ? env.botInstance.settings["rewardRisk"] as number
+    : riskSettings?.rewardRisk ?? 1.5;
   const riskAmount     = accountBalance * riskPercent / 100;
 
   const trading = await TradingService.tryConnect(env);

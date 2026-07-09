@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Env } from "../index.ts";
 import { runTrendlineBacktest, buildSummary } from "./runner.ts";
 import type { BacktestConfig, BacktestResult } from "./runner.ts";
-import { getBotSettings, saveBotSignal } from "../bot/engine.ts";
+import { saveBotSignal } from "../bot/engine.ts";
 import { getBot } from "../bot/bot-types.ts";
 
 
@@ -16,19 +16,19 @@ export function createBacktestRouter() {
     if (!body.pairs?.length || !body.fromMs || !body.toMs) {
       return c.json({ error: "pairs, fromMs, toMs are required" }, 400);
     }
+    if (!body.botId) return c.json({ error: "botId is required" }, 400);
 
-    // Resolve bot instance settings — bot-level overrides system-level
-    const [riskRaw, botSettings, botInstance] = await Promise.all([
+    const [riskRaw, botInstance] = await Promise.all([
       c.env.KV.get("user:risk_settings", "json") as Promise<Record<string, number> | null>,
-      getBotSettings(c.env.KV),
-      body.botId ? getBot(c.env.DB, body.botId) : Promise.resolve(null),
+      getBot(c.env.DB, body.botId),
     ]);
+    if (!botInstance) return c.json({ error: "Bot not found" }, 404);
 
-    const botS           = botInstance?.settings ?? {};
+    // Use the bot's exact settings — no fallbacks. A backtest must be identical to a live run.
     const accountBalance = riskRaw?.accountBalance ?? 1000;
-    const riskPercent    = (botS["riskPercent"] as number | undefined) ?? riskRaw?.riskPercent ?? 1;
-    const rewardRisk     = (botS["rewardRisk"]  as number | undefined) ?? riskRaw?.rewardRisk  ?? 1.5;
-    const minScore       = (botS["minConfidenceScore"] as number | undefined) ?? botSettings.minConfidenceScore ?? 65;
+    const riskPercent    = botInstance.settings["riskPercent"]        as number;
+    const rewardRisk     = botInstance.settings["rewardRisk"]         as number;
+    const minScore       = botInstance.settings["minConfidenceScore"] as number;
     const pairs          = body.pairs;
     const { fromMs, toMs } = body;
 
