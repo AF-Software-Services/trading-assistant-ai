@@ -5,6 +5,7 @@ export interface BotSettings {
   minConfidenceScore: number;
   minConfluence:      number;
   maxOpenPositions:   number;
+  allowDuplicatePairs: boolean;
   dailyLossLimitPct:  number;
   allowedSessions:    string[];
   pairs:              string[];
@@ -60,7 +61,8 @@ export async function getBotSettings(kv: KVNamespace): Promise<BotSettings> {
     mode:               saved?.mode               ?? "off",
     minConfidenceScore: saved?.minConfidenceScore ?? 60,
     minConfluence:      saved?.minConfluence      ?? 2,
-    maxOpenPositions:   saved?.maxOpenPositions   ?? 2,
+    maxOpenPositions:    saved?.maxOpenPositions    ?? 2,
+    allowDuplicatePairs: saved?.allowDuplicatePairs ?? false,
     dailyLossLimitPct:  saved?.dailyLossLimitPct  ?? 2,
     allowedSessions:    saved?.allowedSessions    ?? ["london", "ny", "overlap_london_ny"],
     pairs:              saved?.pairs              ?? [],

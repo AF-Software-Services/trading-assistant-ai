@@ -27,7 +27,8 @@ export interface BacktestConfig {
   riskPercent: number;
   rewardRisk: number;
   minScore: number;
-  maxOpenPositions: number;
+  maxOpenPositions:    number;
+  allowDuplicatePairs: boolean;
 }
 
 interface TwelveDataCandle {
@@ -265,8 +266,8 @@ export async function runTrendlineBacktest(
       for (let j = openPositions.length - 1; j >= 0; j--) {
         if (openPositions[j]!.closeTime <= cutoff) openPositions.splice(j, 1);
       }
-      // No second position on the same pair
-      if (openPositions.some(p => p.pair === pair)) {
+      // No second position on the same pair (unless bot allows it)
+      if (!config.allowDuplicatePairs && openPositions.some(p => p.pair === pair)) {
         rejections["position_open"] = (rejections["position_open"] ?? 0) + 1;
         continue;
       }

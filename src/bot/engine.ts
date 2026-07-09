@@ -138,6 +138,7 @@ export async function runBotScan(env: {
   let minConfidenceScore: number;
   let minConfluence: number;
   let maxOpenPositions: number;
+  let allowDuplicatePairs: boolean;
   let botId: string;
   let botType: string;
   let targetPairsOverride: CurrencyPair[] | null = null;
@@ -145,19 +146,21 @@ export async function runBotScan(env: {
   if (env.botInstance) {
     const bot = env.botInstance;
     mode               = bot.mode;
-    minConfidenceScore = bot.settings.minConfidenceScore as number;
-    minConfluence      = bot.settings.minConfluence      as number;
-    maxOpenPositions   = bot.settings.maxOpenPositions   as number;
-    botId              = bot.id;
+    minConfidenceScore  = bot.settings.minConfidenceScore  as number;
+    minConfluence       = bot.settings.minConfluence       as number;
+    maxOpenPositions    = bot.settings.maxOpenPositions    as number;
+    allowDuplicatePairs = bot.settings.allowDuplicatePairs as boolean;
+    botId               = bot.id;
     botType            = bot.type;
     targetPairsOverride = bot.pairs.length > 0 ? bot.pairs : null;
   } else {
     const settings = await getBotSettings(env.KV);
     mode               = settings.mode;
-    minConfidenceScore = settings.minConfidenceScore;
-    minConfluence      = settings.minConfluence;
-    maxOpenPositions   = settings.maxOpenPositions;
-    botId              = "legacy";
+    minConfidenceScore  = settings.minConfidenceScore;
+    minConfluence       = settings.minConfluence;
+    maxOpenPositions    = settings.maxOpenPositions;
+    allowDuplicatePairs = settings.allowDuplicatePairs;
+    botId               = "legacy";
     botType            = "trendline";
     targetPairsOverride = settings.pairs.length > 0 ? settings.pairs as CurrencyPair[] : null;
   }
@@ -242,7 +245,7 @@ export async function runBotScan(env: {
     result.pairsScanned++;
 
     try {
-      if (openPositionPairs.has(pair)) continue;
+      if (!allowDuplicatePairs && openPositionPairs.has(pair)) continue;
       if (openCount >= maxOpenPositions) break;
 
       const lastExecuted = await env.KV.get(`bot:last_executed:${botId}:${pair}`);

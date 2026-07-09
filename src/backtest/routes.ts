@@ -29,7 +29,8 @@ export function createBacktestRouter() {
     const riskPercent       = botInstance.settings["riskPercent"]        as number;
     const rewardRisk        = botInstance.settings["rewardRisk"]         as number;
     const minScore          = botInstance.settings["minConfidenceScore"] as number;
-    const maxOpenPositions  = botInstance.settings["maxOpenPositions"]   as number;
+    const maxOpenPositions   = botInstance.settings["maxOpenPositions"]   as number;
+    const allowDuplicatePairs = botInstance.settings["allowDuplicatePairs"] as boolean;
     const pairs          = body.pairs;
     const { fromMs, toMs } = body;
 
@@ -43,7 +44,7 @@ export function createBacktestRouter() {
     c.executionCtx.waitUntil((async () => {
       try {
         const { signals, diagnostics, log } = await runTrendlineBacktest(
-          { pairs, fromMs, toMs, accountBalance, riskPercent, rewardRisk, minScore, maxOpenPositions },
+          { pairs, fromMs, toMs, accountBalance, riskPercent, rewardRisk, minScore, maxOpenPositions, allowDuplicatePairs },
           c.env.TWELVE_DATA_API_KEY,
           (msg) => console.log(`[backtest ${runId}] ${msg}`),
           c.env.KV,
