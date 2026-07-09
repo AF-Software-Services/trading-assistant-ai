@@ -25,10 +25,11 @@ export function createBacktestRouter() {
     if (!botInstance) return c.json({ error: "Bot not found" }, 404);
 
     // Use the bot's exact settings — no fallbacks. A backtest must be identical to a live run.
-    const accountBalance = riskRaw?.accountBalance ?? 1000;
-    const riskPercent    = botInstance.settings["riskPercent"]        as number;
-    const rewardRisk     = botInstance.settings["rewardRisk"]         as number;
-    const minScore       = botInstance.settings["minConfidenceScore"] as number;
+    const accountBalance    = riskRaw?.accountBalance ?? 1000;
+    const riskPercent       = botInstance.settings["riskPercent"]        as number;
+    const rewardRisk        = botInstance.settings["rewardRisk"]         as number;
+    const minScore          = botInstance.settings["minConfidenceScore"] as number;
+    const maxOpenPositions  = botInstance.settings["maxOpenPositions"]   as number;
     const pairs          = body.pairs;
     const { fromMs, toMs } = body;
 
@@ -42,7 +43,7 @@ export function createBacktestRouter() {
     c.executionCtx.waitUntil((async () => {
       try {
         const { signals, diagnostics, log } = await runTrendlineBacktest(
-          { pairs, fromMs, toMs, accountBalance, riskPercent, rewardRisk, minScore },
+          { pairs, fromMs, toMs, accountBalance, riskPercent, rewardRisk, minScore, maxOpenPositions },
           c.env.TWELVE_DATA_API_KEY,
           (msg) => console.log(`[backtest ${runId}] ${msg}`),
           c.env.KV,

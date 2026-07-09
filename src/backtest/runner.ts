@@ -27,6 +27,7 @@ export interface BacktestConfig {
   riskPercent: number;
   rewardRisk: number;
   minScore: number;
+  maxOpenPositions: number;
 }
 
 interface TwelveDataCandle {
@@ -269,8 +270,8 @@ export async function runTrendlineBacktest(
         rejections["position_open"] = (rejections["position_open"] ?? 0) + 1;
         continue;
       }
-      // Max 2 concurrent positions across all pairs
-      if (openPositions.length >= 2) {
+      // Max concurrent positions across all pairs (from bot settings)
+      if (openPositions.length >= config.maxOpenPositions) {
         rejections["max_positions"] = (rejections["max_positions"] ?? 0) + 1;
         continue;
       }

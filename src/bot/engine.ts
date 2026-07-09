@@ -137,6 +137,7 @@ export async function runBotScan(env: {
   let mode: "off" | "approval" | "autonomous";
   let minConfidenceScore: number;
   let minConfluence: number;
+  let maxOpenPositions: number;
   let botId: string;
   let botType: string;
   let targetPairsOverride: CurrencyPair[] | null = null;
@@ -144,8 +145,9 @@ export async function runBotScan(env: {
   if (env.botInstance) {
     const bot = env.botInstance;
     mode               = bot.mode;
-    minConfidenceScore = (bot.settings.minConfidenceScore as number) ?? 60;
-    minConfluence      = (bot.settings.minConfluence      as number) ?? 2;
+    minConfidenceScore = bot.settings.minConfidenceScore as number;
+    minConfluence      = bot.settings.minConfluence      as number;
+    maxOpenPositions   = bot.settings.maxOpenPositions   as number;
     botId              = bot.id;
     botType            = bot.type;
     targetPairsOverride = bot.pairs.length > 0 ? bot.pairs : null;
@@ -154,6 +156,7 @@ export async function runBotScan(env: {
     mode               = settings.mode;
     minConfidenceScore = settings.minConfidenceScore;
     minConfluence      = settings.minConfluence;
+    maxOpenPositions   = settings.maxOpenPositions;
     botId              = "legacy";
     botType            = "trendline";
     targetPairsOverride = settings.pairs.length > 0 ? settings.pairs as CurrencyPair[] : null;
@@ -240,7 +243,7 @@ export async function runBotScan(env: {
 
     try {
       if (openPositionPairs.has(pair)) continue;
-      if (openCount >= 2) break;
+      if (openCount >= maxOpenPositions) break;
 
       const lastExecuted = await env.KV.get(`bot:last_executed:${botId}:${pair}`);
       if (lastExecuted && Date.now() - parseInt(lastExecuted) < 4 * 60 * 60 * 1000) continue;
