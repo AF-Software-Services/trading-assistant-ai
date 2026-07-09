@@ -25,9 +25,9 @@ export function createBacktestRouter() {
     ]);
 
     const botS           = botInstance?.settings ?? {};
-    const accountBalance = body.accountBalance ?? riskRaw?.accountBalance ?? 10000;
-    const riskPercent    = (botS["riskPercent"] as number | undefined) ?? 1;
-    const rewardRisk     = (botS["rewardRisk"]  as number | undefined) ?? 2.5;
+    const accountBalance = riskRaw?.accountBalance ?? 1000;
+    const riskPercent    = (botS["riskPercent"] as number | undefined) ?? riskRaw?.riskPercent ?? 1;
+    const rewardRisk     = (botS["rewardRisk"]  as number | undefined) ?? riskRaw?.rewardRisk  ?? 1.5;
     const minScore       = (botS["minConfidenceScore"] as number | undefined) ?? botSettings.minConfidenceScore ?? 65;
     const pairs          = body.pairs;
     const { fromMs, toMs } = body;
