@@ -736,6 +736,8 @@ async function placeManualTrade(direction: 'buy' | 'sell'): Promise<void> {
     if (data.success) {
       result.className = 'trade-result success'
       result.textContent = `✓ ${tradeOrderType.toUpperCase()} ${direction.toUpperCase()} ${lots.toFixed(2)} lots ${pair} placed`
+      // Market orders take a moment to appear on cTrader's side — wait before refreshing
+      await new Promise(r => setTimeout(r, tradeOrderType === 'market' ? 2000 : 500))
       loadCTraderPositions()
     } else {
       result.className = 'trade-result error'
