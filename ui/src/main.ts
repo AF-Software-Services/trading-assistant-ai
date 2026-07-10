@@ -588,7 +588,7 @@ async function loadCTraderPositions(): Promise<void> {
       <div class="position-row">
         <span class="pos-symbol">${p.symbol}</span>
         <span class="pos-dir ${p.direction}">${p.direction.toUpperCase()}</span>
-        <span class="pos-vol">${(p.volume / 100).toFixed(2)} lots</span>
+        <span class="pos-vol">${(p.volume / 100000).toFixed(2)} lots</span>
         <span class="pos-price">@ ${p.openPrice.toFixed(5)}</span>
         <button class="small-btn close-pos-btn" data-id="${p.positionId}" data-vol="${p.volume}">Close</button>
       </div>`).join('')
@@ -828,7 +828,7 @@ async function loadPositions(): Promise<void> {
 
     const tbody = el<HTMLTableSectionElement>('positions-body')
     tbody.innerHTML = positions.map(p => {
-      const lots = (p.volume / 100).toFixed(2)
+      const lots = (p.volume / 100000).toFixed(2)
       const dec  = p.symbol.includes('JPY') ? 3 : 5
       const dir  = p.direction === 'buy' ? 'buy' : 'sell'
       const date = p.openTime ? new Date(p.openTime).toLocaleDateString('en-GB') : '—'
@@ -897,7 +897,7 @@ async function loadHistory(): Promise<void> {
 
     const tbody = el<HTMLTableSectionElement>('history-body')
     tbody.innerHTML = deals.map(d => {
-      const lots   = (d.volume / 100).toFixed(2)
+      const lots   = (d.volume / 100000).toFixed(2)
       const dec    = d.symbol.includes('JPY') ? 3 : 5
       const dir    = d.direction === 'buy' ? 'buy' : 'sell'
       const date   = d.closeTime ? new Date(d.closeTime).toLocaleDateString('en-GB') : '—'

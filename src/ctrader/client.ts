@@ -229,8 +229,8 @@ export class CTraderClient {
     stopLoss?:   number;
     takeProfit?: number;
   }): Promise<{ orderId: number }> {
-    // cTrader volume = standard forex units (1 lot = 100,000). Must be whole lots.
-    const volume = Math.max(100000, Math.round(params.lots) * 100000);
+    // cTrader volume = units (1 lot = 100,000). Round to nearest 0.01 lot (1,000 units).
+    const volume = Math.max(1000, Math.round(params.lots * 100) * 1000);
     const conn = await this.connect();
     try {
       await this.auth(conn);
