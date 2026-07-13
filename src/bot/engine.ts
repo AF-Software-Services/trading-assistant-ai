@@ -5,6 +5,7 @@ import { createMarketDataProvider }        from "../providers/factory.ts";
 import { detectTrendlineSignal }           from "../engines/trendline.ts";
 import { storeTrendlineTrailState }        from "./monitor.ts";
 import { TradingService }                  from "../trading/service.ts";
+import { getAccount, updateAccountBalance, getPrimaryAccountBalance } from "../ctrader/account-types.ts";
 import { createJournalEntry, buildFeaturesFromContext } from "../storage/journal.ts";
 import type { BotSignal }                  from "./signal-store.ts";
 import {
@@ -19,7 +20,7 @@ export type { BotSignal, BotSettings } from "./signal-store.ts";
 export {
   getBotSettings, saveBotSettings,
   getBotSignal,   getBotSignals,  updateBotSignalStatus,
-  recordBotSignalOutcome, saveBotSignal,
+  recordBotSignalOutcome, saveBotSignal, clearBotSignalJournalId,
 } from "./signal-store.ts";
 
 export interface BotRunResult {
@@ -51,16 +52,6 @@ export function calcLots(riskAmountGBP: number, pair: string, entryPrice: number
   if (stopPips <= 0 || pipVal <= 0) return 0.01;
   const raw = riskAmountGBP / (stopPips * pipVal);
   return Math.max(0.01, Math.min(10, Math.floor(raw * 100) / 100));
-}
-
-function getCurrentSession(): string {
-  const h = new Date().getUTCHours();
-  if (h >= 7  && h < 9)  return "overlap_asian_london";
-  if (h >= 9  && h < 12) return "london";
-  if (h >= 12 && h < 13) return "overlap_london_ny";
-  if (h >= 13 && h < 17) return "ny";
-  if (h >= 17 && h < 21) return "ny_late";
-  return "asian";
 }
 
 // ── Execute a signal via cTrader ──────────────────────────────────────────────
@@ -126,7 +117,6 @@ export async function runBotScan(env: {
   CTRADER_CLIENT_ID: string;
   CTRADER_CLIENT_SECRET: string;
   CTRADER_ACCOUNT_ID: string;
-  skipSessionGate?: boolean;
   botInstance?: BotInstance;
 }): Promise<BotRunResult> {
   const result: BotRunResult = {
@@ -170,18 +160,8 @@ export async function runBotScan(env: {
     return result;
   }
 
-  const session = getCurrentSession();
-  if (!env.skipSessionGate) {
-    const settings = await getBotSettings(env.KV);
-    if (!settings.allowedSessions.includes(session)) {
-      result.errors.push(`Session ${session} not in allowed list`);
-      return result;
-    }
-  }
-
   const riskSettings = await env.KV.get("user:risk_settings", "json") as
-    { accountBalance?: number; riskPercent?: number; rewardRisk?: number } | null;
-  const accountBalance = riskSettings?.accountBalance ?? 1000;
+    { riskPercent?: number; rewardRisk?: number } | null;
   // Bot-level sizing overrides global risk settings; fall back to global if not yet saved on the bot.
   const riskPercent = env.botInstance
     ? (env.botInstance.settings["riskPercent"] as number | undefined) ?? (riskSettings?.riskPercent ?? 1)
@@ -189,11 +169,21 @@ export async function runBotScan(env: {
   const rrRatio = env.botInstance
     ? (env.botInstance.settings["rewardRisk"] as number | undefined) ?? (riskSettings?.rewardRisk ?? 1.5)
     : riskSettings?.rewardRisk ?? 1.5;
-  const riskAmount     = accountBalance * riskPercent / 100;
 
-  const trading = await TradingService.tryConnect(env);
+  // Connect to the bot's assigned account; fall back to legacy global token
+  const botAccount = env.botInstance?.accountId
+    ? await getAccount(env.DB, env.botInstance.accountId)
+    : null;
+  const trading = botAccount
+    ? await TradingService.tryConnectToAccount(env, botAccount)
+    : await TradingService.tryConnect(env);
   let openPositionPairs: Set<string> = new Set();
   let openCount = 0;
+
+  // Size trades off the account's real balance, not a manually-typed guess.
+  // Fetched fresh each scan (we already pay the TCP round-trip for the positions check below);
+  // fall back to the cached value on the bot's own account, then any connected account, then a safe default.
+  let accountBalance = botAccount?.balance ?? await getPrimaryAccountBalance(env.DB) ?? 1000;
 
   if (trading) {
     try {
@@ -208,24 +198,25 @@ export async function runBotScan(env: {
       result.warnings = result.warnings ?? [];
       result.warnings.push(`cTrader position check skipped: ${(e as Error).message}`);
     }
+
+    try {
+      const { balance } = await trading.getBalance();
+      accountBalance = balance;
+      if (botAccount) await updateAccountBalance(env.DB, botAccount.id, balance, Date.now());
+    } catch { /* keep cached/fallback accountBalance */ }
   } else if (mode === "autonomous") {
     result.errors.push("cTrader not connected — cannot execute autonomously");
     return result;
   }
 
-  if (trading) {
-    const expiring = await env.DB.prepare(
-      `SELECT id, ctrader_position_id FROM bot_signals
-       WHERE status = 'executed' AND expires_at < ? AND ctrader_position_id IS NOT NULL`
-    ).bind(Date.now()).all<{ id: string; ctrader_position_id: number }>();
+  const riskAmount = accountBalance * riskPercent / 100;
 
-    for (const row of expiring.results) {
-      try {
-        await trading.cancelOrder(row.ctrader_position_id);
-      } catch { /* order may already be filled or gone */ }
-      await updateBotSignalStatus(env.DB, row.id, "expired");
-    }
-  }
+  // Note: closing out finished signals (recording tp/sl outcome, or leaving a genuinely
+  // never-filled order alone) is monitorPositions()'s job (bot/monitor.ts) — it runs every
+  // cron tick right after this scan and does it correctly by checking trade history. An
+  // earlier version of this function also tried to expire/cancel stale signals here, but
+  // ran first in the same tick and would blindly attempt to "cancel" positions that had
+  // simply filled and closed normally, mislabeling real completed trades as expired.
 
   await env.DB.prepare(
     `UPDATE bot_signals SET status = 'expired'
@@ -252,8 +243,8 @@ export async function runBotScan(env: {
 
       if (botType === "trendline") {
         const [candles4H, candlesD] = await Promise.all([
-          provider.getCandles(pair, "4H",   200),
-          provider.getCandles(pair, "1day",  30),
+          provider.getCandles(pair, "4H", 200),
+          provider.getCandles(pair, "D", 30),
         ]);
         const tlSig = detectTrendlineSignal(candles4H, rrRatio, 5, candlesD);
 

@@ -196,15 +196,24 @@ export async function createJournalEntry(
 export async function updateJournalOutcome(
   db: D1Database,
   id: string,
-  outcome: { result: "win" | "loss" | "breakeven"; exitPrice: number; notes?: string }
+  outcome: {
+    result: "win" | "loss" | "breakeven";
+    exitPrice: number;
+    notes?: string;
+    // Real fill price of the position, when known (e.g. a limit order that filled away from
+    // its originally logged entryPrice). Falls back to the journal's own recorded entryPrice
+    // (the planned level) so callers that don't have this — manual journal updates — still work.
+    entryPrice?: number;
+  }
 ): Promise<void> {
   const entry = await getJournalEntry(db, id);
   if (!entry) throw new Error(`Journal entry ${id} not found`);
 
+  const realEntryPrice = outcome.entryPrice ?? entry.entryPrice;
   const pipFactor = entry.pair.includes("JPY") ? 100 : 10000;
   const d = entry.direction === "buy" ? 1 : -1;
-  const pnlPips = (outcome.exitPrice - entry.entryPrice) * pipFactor * d;
-  const stopPips = Math.abs(entry.entryPrice - entry.stopLoss) * pipFactor;
+  const pnlPips = (outcome.exitPrice - realEntryPrice) * pipFactor * d;
+  const stopPips = Math.abs(realEntryPrice - entry.stopLoss) * pipFactor;
   const rrAchieved = stopPips > 0 ? pnlPips / stopPips : 0;
 
   await db
@@ -224,6 +233,13 @@ export async function updateJournalOutcome(
       id
     )
     .run();
+}
+
+// A signal whose order never actually filled (no deal at all on the broker side) never
+// became a real trade — its journal row would otherwise sit showing "OPEN" forever, since
+// there's no closing deal that will ever arrive to resolve it.
+export async function deleteJournalEntry(db: D1Database, id: string): Promise<void> {
+  await db.prepare(`DELETE FROM trade_journal WHERE id = ?`).bind(id).run();
 }
 
 export async function getJournalEntry(

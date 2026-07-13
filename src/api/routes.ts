@@ -290,18 +290,22 @@ export function createApiRouter(): Hono<{ Bindings: Env }> {
   // ── GET/PUT /api/v1/settings/risk ───────────────────────────────────────────
   // Persists risk settings so the MCP tools can read them without UI context.
   app.get("/settings/risk", async (c) => {
-    const settings = await c.env.KV.get("user:risk_settings", "json") as
-      { accountBalance?: number; riskPercent?: number; rewardRisk?: number } | null;
-    return c.json(settings ?? {});
+    const raw = await c.env.KV.get("user:risk_settings", "json") as
+      { riskPercent?: number; rewardRisk?: number; accountBalance?: number } | null;
+    // accountBalance used to be a manually-entered figure stored here; it's now always
+    // read live from the connected cTrader account, so strip any stale leftover value.
+    const { accountBalance: _stale, ...settings } = raw ?? {};
+    return c.json(settings);
   });
 
   app.put("/settings/risk", async (c) => {
-    const body = await c.req.json<{ accountBalance?: number; riskPercent?: number; rewardRisk?: number }>()
+    const body = await c.req.json<{ riskPercent?: number; rewardRisk?: number }>()
       .catch(() => null);
     if (!body) return c.json({ error: "Invalid body" }, 400);
     const existing = await c.env.KV.get("user:risk_settings", "json") as
-      { accountBalance?: number; riskPercent?: number; rewardRisk?: number } | null ?? {};
-    const updated = { ...existing, ...body };
+      { riskPercent?: number; rewardRisk?: number; accountBalance?: number } | null ?? {};
+    const { accountBalance: _stale, ...rest } = existing;
+    const updated = { ...rest, ...body };
     await c.env.KV.put("user:risk_settings", JSON.stringify(updated));
     return c.json({ saved: true, settings: updated });
   });

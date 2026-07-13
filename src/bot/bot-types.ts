@@ -40,6 +40,7 @@ export interface BotInstance {
   mode:       "off" | "approval" | "autonomous";
   pairs:      CurrencyPair[];    // empty = all PHASE1_PAIRS
   settings:   Record<string, unknown>;
+  accountId:  string | null;     // null = no account assigned
   createdAt:  number;
 }
 
@@ -62,8 +63,8 @@ export async function getBot(db: D1Database, id: string): Promise<BotInstance | 
 export async function createBot(db: D1Database, bot: Omit<BotInstance, "createdAt">): Promise<BotInstance> {
   const now = Date.now();
   await db.prepare(
-    `INSERT INTO bots (id, name, type, mode, pairs_json, settings_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO bots (id, name, type, mode, pairs_json, settings_json, account_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     bot.id,
     bot.name,
@@ -71,6 +72,7 @@ export async function createBot(db: D1Database, bot: Omit<BotInstance, "createdA
     bot.mode,
     JSON.stringify(bot.pairs),
     JSON.stringify(bot.settings),
+    bot.accountId ?? null,
     now,
   ).run();
   return { ...bot, createdAt: now };
@@ -79,26 +81,28 @@ export async function createBot(db: D1Database, bot: Omit<BotInstance, "createdA
 export async function updateBot(
   db: D1Database,
   id: string,
-  patch: Partial<Pick<BotInstance, "name" | "mode" | "pairs" | "settings">>
+  patch: Partial<Pick<BotInstance, "name" | "mode" | "pairs" | "settings" | "accountId">>
 ): Promise<BotInstance | null> {
   const existing = await getBot(db, id);
   if (!existing) return null;
 
   const updated: BotInstance = {
     ...existing,
-    ...(patch.name     !== undefined ? { name: patch.name }         : {}),
-    ...(patch.mode     !== undefined ? { mode: patch.mode }         : {}),
-    ...(patch.pairs    !== undefined ? { pairs: patch.pairs }       : {}),
-    ...(patch.settings !== undefined ? { settings: { ...existing.settings, ...patch.settings } } : {}),
+    ...(patch.name      !== undefined ? { name:      patch.name }                                    : {}),
+    ...(patch.mode      !== undefined ? { mode:      patch.mode }                                    : {}),
+    ...(patch.pairs     !== undefined ? { pairs:     patch.pairs }                                   : {}),
+    ...(patch.settings  !== undefined ? { settings:  { ...existing.settings, ...patch.settings } }   : {}),
+    ...(patch.accountId !== undefined ? { accountId: patch.accountId }                               : {}),
   };
 
   await db.prepare(
-    `UPDATE bots SET name = ?, mode = ?, pairs_json = ?, settings_json = ? WHERE id = ?`
+    `UPDATE bots SET name = ?, mode = ?, pairs_json = ?, settings_json = ?, account_id = ? WHERE id = ?`
   ).bind(
     updated.name,
     updated.mode,
     JSON.stringify(updated.pairs),
     JSON.stringify(updated.settings),
+    updated.accountId ?? null,
     id,
   ).run();
 
@@ -112,12 +116,13 @@ export async function deleteBot(db: D1Database, id: string): Promise<boolean> {
 
 function rowToBot(row: Record<string, unknown>): BotInstance {
   return {
-    id:        row["id"]       as string,
-    name:      row["name"]     as string,
-    type:      row["type"]     as BotTypeId,
-    mode:      row["mode"]     as BotInstance["mode"],
+    id:        row["id"]         as string,
+    name:      row["name"]       as string,
+    type:      row["type"]       as BotTypeId,
+    mode:      row["mode"]       as BotInstance["mode"],
     pairs:     JSON.parse(row["pairs_json"]    as string) as CurrencyPair[],
     settings:  JSON.parse(row["settings_json"] as string) as Record<string, unknown>,
+    accountId: (row["account_id"] as string | null) ?? null,
     createdAt: row["created_at"] as number,
   };
 }
@@ -135,11 +140,12 @@ export async function seedBotsFromLegacyKV(
   const legacy = await kv.get("bot:settings", "json") as Record<string, unknown> | null;
 
   await createBot(db, {
-    id:       "bot_trendline_1",
-    name:     "Trendline Bot",
-    type:     "trendline",
-    mode:     (legacy?.mode as BotInstance["mode"]) ?? "off",
-    pairs:    (legacy?.pairs as CurrencyPair[]) ?? [],
+    id:        "bot_trendline_1",
+    name:      "Trendline Bot",
+    type:      "trendline",
+    mode:      (legacy?.mode as BotInstance["mode"]) ?? "off",
+    pairs:     (legacy?.pairs as CurrencyPair[]) ?? [],
+    accountId: null,
     settings: {
       minConfidenceScore: (legacy?.minConfidenceScore as number) ?? 60,
       minTouches:         2,

@@ -9,6 +9,23 @@
   --entry: #e6edf3;
   --sl: #f85149;
   --tp: #3fb950;
+  --accent: #58a6ff;
+
+  /* Aliases — several stylesheet rules reference these under different names than the
+     canonical ones above (--bg2 vs --panel-bg, --fg vs --text, etc). Defining them here
+     as aliases fixes every reference at once instead of hunting down each call site;
+     without this they silently resolved to transparent/unset (e.g. the mobile bottom
+     nav bar, which used --bg2 and rendered fully see-through). */
+  --bg2: var(--panel-bg);
+  --bg-2: var(--panel-bg);
+  --bg-secondary: var(--panel-bg);
+  --surface: var(--panel-bg);
+  --bg3: #21262d;
+  --fg: var(--text);
+  --text-primary: var(--text);
+  --text-muted: var(--muted);
+  --green: var(--buy);
+  --red: var(--sell);
 }
 
 *, *::before, *::after {
@@ -373,20 +390,18 @@ html, body {
   font-size: 11px;
 }
 
-.risk-dropdown-row input {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
+.risk-balance-value {
+  font-size: 16px;
+  font-weight: 700;
+  font-family: monospace;
   color: var(--text);
-  font-size: 13px;
-  padding: 5px 8px;
-  width: 100%;
-  box-sizing: border-box;
 }
 
-.risk-dropdown-row input:focus {
-  border-color: var(--accent);
-  outline: none;
+.risk-balance-hint {
+  font-size: 10px;
+  color: var(--accent);
+  margin-top: -4px;
+  margin-bottom: 4px;
 }
 
 .risk-dropdown-divider {
@@ -489,6 +504,13 @@ html, body {
 .tab-btn.active {
   color: var(--text);
   border-bottom-color: #58a6ff;
+}
+
+/* Mobile-only "More" tab and its sheet — hidden entirely on desktop */
+#mobile-more-btn,
+#mobile-more-overlay,
+#mobile-more-sheet {
+  display: none;
 }
 
 .tab-bar-separator {
@@ -1174,6 +1196,261 @@ html, body {
   text-align: center;
   padding: 8px 0;
 }
+
+/* ── Dashboard ─────────────────────────────────────────────────────────────── */
+.dash-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.dash-header h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+
+.dash-summary-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.dash-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.dash-card-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 6px;
+}
+.dash-card-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.dash-card-sub {
+  font-size: 12px;
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-positions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 20px;
+}
+.dash-position-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text);
+}
+.dash-position-main {
+  display: grid;
+  grid-template-columns: 50px 1fr 1fr 1fr;
+  gap: 8px;
+  align-items: center;
+}
+.dash-position-levels {
+  display: flex;
+  gap: 16px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  flex-wrap: wrap;
+}
+.dash-position-levels b { color: var(--text); font-weight: 600; }
+.dash-position-levels b.buy  { color: var(--buy); }
+.dash-position-levels b.sell { color: var(--sell); }
+.dash-position-dist { color: var(--muted); font-size: 11px; }
+.dash-position-stale { color: var(--muted); font-style: italic; }
+
+.dash-periods-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+.dash-period-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+.dash-period-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.dash-period-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 3px 0;
+  font-variant-numeric: tabular-nums;
+}
+.dash-period-row span:last-child { color: var(--text); }
+
+/* Bare .buy/.sell text colouring, scoped to the dashboard (chart labels, streak, etc.) */
+#tab-dashboard .buy  { color: var(--buy); }
+#tab-dashboard .sell { color: var(--sell); }
+
+.dash-card-ring {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.dash-ring {
+  width: 84px;
+  height: 84px;
+  margin-top: 2px;
+}
+.dash-ring-track {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 8;
+}
+.dash-ring-progress {
+  fill: none;
+  stroke-width: 8;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+  transition: stroke-dashoffset 0.4s ease;
+}
+.dash-ring-pct {
+  font-size: 20px;
+  font-weight: 700;
+  fill: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.dash-ring-sub {
+  font-size: 9px;
+  fill: var(--muted);
+}
+
+.dash-panel-block {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+.dash-panel-block-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+
+.dash-equity-svg {
+  width: 100%;
+  height: 180px;
+  display: block;
+}
+.dash-equity-zero { stroke: var(--border); stroke-width: 1; stroke-dasharray: 4 3; }
+.dash-equity-area.buy  { fill: color-mix(in srgb, var(--buy) 18%, transparent); }
+.dash-equity-area.sell { fill: color-mix(in srgb, var(--sell) 18%, transparent); }
+.dash-equity-line.buy  { stroke: var(--buy); }
+.dash-equity-line.sell { stroke: var(--sell); }
+.dash-equity-line { fill: none; stroke-width: 2; }
+.dash-equity-dot.buy  { fill: var(--buy); }
+.dash-equity-dot.sell { fill: var(--sell); }
+
+.dash-charts-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.dash-charts-row .dash-panel-block { margin-bottom: 0; }
+
+.dash-bar-chart {
+  display: flex;
+  justify-content: space-around;
+  align-items: flex-end;
+  height: 140px;
+  padding-top: 8px;
+}
+.dash-bar-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  justify-content: flex-end;
+}
+.dash-bar-pair {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 110px;
+}
+.dash-bar {
+  width: 16px;
+  min-height: 2px;
+  border-radius: 3px 3px 0 0;
+}
+.dash-bar.buy  { background: var(--buy); }
+.dash-bar.sell { background: var(--sell); }
+.dash-bar-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.dash-pair-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dash-pair-bar-row {
+  display: grid;
+  grid-template-columns: 60px 1fr 80px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.dash-pair-bar-label { color: var(--text); }
+.dash-pair-bar-track {
+  background: var(--bg);
+  border-radius: 3px;
+  height: 8px;
+  overflow: hidden;
+}
+.dash-pair-bar-fill { height: 100%; }
+.dash-pair-bar-fill.buy  { background: var(--buy); }
+.dash-pair-bar-fill.sell { background: var(--sell); }
+.dash-pair-bar-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 768px) {
+  .dash-summary-row { grid-template-columns: 1fr; }
+  .dash-periods-grid { grid-template-columns: 1fr 1fr; }
+  .dash-position-row { font-size: 11px; }
+  .dash-position-main { grid-template-columns: 50px 1fr 1fr; }
+  .dash-position-main span:nth-child(4) { display: none; }
+  .dash-position-levels { gap: 10px; }
+  .dash-charts-row { grid-template-columns: 1fr; }
+}
 .bot-signal-card {
   background: var(--bg2);
   border: 1px solid var(--border);
@@ -1296,6 +1573,70 @@ html, body {
   background: rgba(63,185,80,0.12);
   color: var(--buy);
 }
+
+/* ── Account rows ────────────────────────────────────────────────────────────── */
+.account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.account-row:last-child { border-bottom: none; }
+.account-row-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.account-row-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.account-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.account-meta {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: monospace;
+  white-space: nowrap;
+}
+.account-balance {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  font-family: monospace;
+  white-space: nowrap;
+}
+.acct-refresh-balance-btn {
+  font-size: 12px;
+  padding: 2px 7px;
+  line-height: 1;
+}
+.acct-type-badge {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+.acct-badge-demo { background: rgba(88,166,255,0.15); color: var(--accent); }
+.acct-badge-live { background: rgba(248,81,73,0.15);  color: var(--sell);   }
+.acct-status-connected { font-size: 10px; color: var(--buy);   white-space: nowrap; }
+.acct-status-pending   { font-size: 10px; color: var(--muted); white-space: nowrap; }
+
 .bot-card-mode {
   font-size: 9px;
   font-weight: 700;
@@ -1435,6 +1776,7 @@ html, body {
 .bot-card-delete-btn:hover { background: rgba(248,81,73,0.1); }
 
 /* ── Cron Log table ──────────────────────────────────────────────────────────── */
+#cron-log-list { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .cron-log-table {
   width: 100%;
   border-collapse: collapse;
@@ -1457,6 +1799,17 @@ html, body {
 .cron-log-table tr:hover td { background: var(--bg3); }
 .cron-log-err { color: var(--sell); cursor: help; }
 .cron-log-ok  { color: var(--muted); }
+
+.cron-log-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 4px 2px;
+  font-size: 11px;
+  font-family: monospace;
+}
+.cron-log-pager-info { color: var(--muted); }
+.cron-log-pager-btns { display: flex; gap: 6px; }
 
 /* Bot signal bot-id label */
 .bot-signal-bot-label {
@@ -1729,7 +2082,7 @@ html, body {
   font-family: monospace;
 }
 #bt-runs-body .bt-run-row:hover { background: var(--bg2); cursor: pointer; }
-.bt-run-date  { color: var(--muted); flex: 0 0 140px; }
+.bt-run-date  { color: var(--muted); flex: 0 0 168px; white-space: nowrap; }
 .bt-run-strategy-badge { font-size: 10px; border-radius: 3px; padding: 1px 6px; background: rgba(100,120,200,0.2); color: #8899dd; flex: 0 0 28px; text-align: center; }
 .bt-run-pairs { color: var(--fg);    flex: 1; }
 .bt-run-status-badge {
@@ -1884,6 +2237,12 @@ html, body {
     display: none !important;
   }
 
+  /* Only the 4 most-frequently-checked tabs get a permanent bottom-bar slot; the rest
+     live behind "More" so the bar doesn't get overcrowded on a small screen. */
+  .tab-btn:not([data-mobile-primary]):not(#mobile-more-btn) {
+    display: none;
+  }
+
   .tab-btn {
     flex: 1;
     min-width: 52px;
@@ -1903,6 +2262,71 @@ html, body {
   .tab-btn.active {
     border-top-color: var(--accent);
     background: rgba(255,255,255,0.04);
+  }
+
+  #mobile-more-btn {
+    display: flex;
+  }
+  #mobile-more-btn.active {
+    border-top-color: var(--accent);
+    background: rgba(255,255,255,0.04);
+  }
+  .mobile-more-icon {
+    font-size: 16px;
+    line-height: 1;
+  }
+
+  #mobile-more-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    z-index: 149;
+  }
+  #mobile-more-overlay.hidden { display: none; }
+
+  #mobile-more-sheet {
+    display: block;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 150;
+    background: var(--panel-bg);
+    border-top: 1px solid var(--border);
+    border-radius: 12px 12px 0 0;
+    padding: 8px 0 calc(56px + env(safe-area-inset-bottom, 0px));
+    box-shadow: 0 -4px 20px rgba(0,0,0,0.5);
+  }
+  #mobile-more-sheet.hidden { display: none; }
+
+  .mobile-more-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 8px 16px;
+  }
+
+  .mobile-more-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    border-top: 1px solid var(--border);
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 600;
+    padding: 14px 16px;
+    cursor: pointer;
+  }
+  .mobile-more-item:active {
+    background: rgba(255,255,255,0.04);
+  }
+  .mobile-more-item.active {
+    color: var(--accent);
   }
 
   /* Tab panels fill remaining space */
@@ -1948,10 +2372,67 @@ html, body {
     grid-template-columns: 1fr 1fr;
   }
 
-  /* Table horizontal scroll */
-  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  .backtest-table th,
-  .backtest-table td { font-size: 10px; padding: 4px 6px; }
+  /* Data tables → stacked cards. No horizontal scrolling on mobile: each row becomes
+     a card, each cell becomes a label/value line using its data-label attribute. */
+  .data-table, .cron-log-table {
+    display: block;
+    width: 100%;
+  }
+  .data-table thead, .cron-log-table thead {
+    display: none;
+  }
+  .data-table tbody, .cron-log-table tbody {
+    display: block;
+  }
+  .data-table tr, .cron-log-table tr {
+    display: block;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+  }
+  .data-table tr:hover td, .cron-log-table tr:hover td {
+    background: none; /* the hover-highlight styling only makes sense for a table row */
+  }
+  .data-table td, .cron-log-table td {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 5px 0;
+    border: none;
+    white-space: normal;
+    text-align: right;
+  }
+  .data-table td:not(:last-child), .cron-log-table td:not(:last-child) {
+    border-bottom: 1px solid var(--border);
+  }
+  .data-table td::before, .cron-log-table td::before {
+    content: attr(data-label);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+    text-align: left;
+    flex-shrink: 0;
+  }
+  /* Cells with no label (action buttons) — full-width, no label row, no divider */
+  .data-table td[data-label=""], .cron-log-table td[data-label=""] {
+    justify-content: flex-end;
+  }
+  .data-table td[data-label=""]::before, .cron-log-table td[data-label=""]::before {
+    display: none;
+  }
+  /* Empty-state rows (e.g. "No trades", colspan placeholder) — render as plain text, not a label row */
+  .data-table td[colspan] {
+    display: block;
+    text-align: center;
+  }
+  .data-table td[colspan]::before {
+    display: none;
+  }
 
   /* Journal form: full width inputs */
   .journal-form input,

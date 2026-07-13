@@ -208,6 +208,14 @@ export class TradingChart {
     this.onTradeLinesChange = cb
   }
 
+  // klinecharts measures its container's pixel size at init/candle-apply time. If the Chart
+  // tab isn't the active tab yet (container is display:none, width/height report 0), it can
+  // end up sizing its internal canvases from that stale zero/garbage measurement — call this
+  // once the tab becomes visible again so it remeasures against the real, laid-out size.
+  resize(): void {
+    this.chart.resize()
+  }
+
   applyCandles(candles: CandleData[]): void {
     this.data = candles
     const data = candles.map(c => ({

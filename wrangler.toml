@@ -5,7 +5,8 @@ compatibility_flags = ["nodejs_compat"]
 
 [triggers]
 crons = [
-  "0 * * * 1-5"
+  "0 * * * 1-5",   # hourly, Monday-Friday — full trading week
+  "0 21-23 * * 7"  # Sunday 21:00/22:00/23:00 UTC — catches the Sydney open, the week's first fresh candles
 ]
 
 [[d1_databases]]
@@ -16,6 +17,9 @@ database_id = "96417c47-1152-465b-9ff2-cec6fe394990"
 [[kv_namespaces]]
 binding = "KV"
 id = "a82afed2ad864e6bb1d11cd57e2f8219"
+
+[limits]
+cpu_ms = 300000
 
 [assets]
 directory = "./dist/ui"

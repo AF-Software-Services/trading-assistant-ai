@@ -6,7 +6,9 @@ import {
   executeSignal,
   runBotScan,
 } from "./engine.ts";
-import { TradingService } from "../trading/service.ts";
+import { monitorPositions } from "./monitor.ts";
+import { TradingService }                from "../trading/service.ts";
+import { getAccount, seedDefaultAccount } from "../ctrader/account-types.ts";
 import {
   listBots,
   getBot,
@@ -51,9 +53,10 @@ export function createBotRouter() {
   // ── POST /api/v1/bot/bots ─────────────────────────────────────────────────────
   app.post("/bots", async (c) => {
     const body = await c.req.json<{
-      name?: string;
-      type?: string;
-      pairs?: string[];
+      name?:      string;
+      type?:      string;
+      pairs?:     string[];
+      accountId?: string | null;
     }>().catch(() => null);
     if (!body?.type) return c.json({ error: "type is required" }, 400);
 
@@ -65,12 +68,13 @@ export function createBotRouter() {
     ) as CurrencyPair[];
 
     const bot = await createBot(c.env.DB, {
-      id:       crypto.randomUUID(),
-      name:     body.name ?? typeDef.displayName,
-      type:     typeDef.id as BotTypeId,
-      mode:     "off",
+      id:        crypto.randomUUID(),
+      name:      body.name ?? typeDef.displayName,
+      type:      typeDef.id as BotTypeId,
+      mode:      "off",
       pairs,
-      settings: { ...typeDef.defaultSettings },
+      accountId: body.accountId ?? null,
+      settings:  { ...typeDef.defaultSettings },
     });
 
     return c.json(bot, 201);
@@ -87,10 +91,11 @@ export function createBotRouter() {
     }
 
     const updated = await updateBot(c.env.DB, id, {
-      name:     body.name,
-      mode:     body.mode,
-      pairs:    body.pairs,
-      settings: body.settings,
+      name:      body.name,
+      mode:      body.mode,
+      pairs:     body.pairs,
+      settings:  body.settings,
+      accountId: body.accountId,
     });
 
     if (!updated) return c.json({ error: "Bot not found" }, 404);
@@ -120,7 +125,6 @@ export function createBotRouter() {
         CTRADER_CLIENT_ID:     c.env.CTRADER_CLIENT_ID,
         CTRADER_CLIENT_SECRET: c.env.CTRADER_CLIENT_SECRET,
         CTRADER_ACCOUNT_ID:    c.env.CTRADER_ACCOUNT_ID,
-        skipSessionGate:       true,
         botInstance:           bot,
       });
       return c.json(result);
@@ -153,9 +157,14 @@ export function createBotRouter() {
       return c.json({ error: "Signal has expired" }, 410);
     }
 
+    // Use the signal's bot account if set, otherwise fall back to legacy global token
     let trading: TradingService;
     try {
-      trading = await TradingService.connect(c.env);
+      const bot         = await getBot(c.env.DB, signal.botId);
+      const botAccount  = bot?.accountId ? await getAccount(c.env.DB, bot.accountId) : null;
+      trading = botAccount
+        ? await TradingService.connectToAccount(c.env, botAccount)
+        : await TradingService.connect(c.env);
     } catch {
       return c.json({ error: "cTrader not connected" }, 401);
     }
@@ -207,7 +216,6 @@ export function createBotRouter() {
           CTRADER_CLIENT_ID:     c.env.CTRADER_CLIENT_ID,
           CTRADER_CLIENT_SECRET: c.env.CTRADER_CLIENT_SECRET,
           CTRADER_ACCOUNT_ID:    c.env.CTRADER_ACCOUNT_ID,
-          skipSessionGate:       true,
           botInstance:           bot,
         });
         results[bot.id] = r;
@@ -237,19 +245,50 @@ export function createBotRouter() {
     return c.json(results);
   });
 
+  // ── POST /api/v1/bot/monitor ──────────────────────────────────────────────────
+  // Runs the same position-reconciliation pass as the cron job (detect closed
+  // trades, record win/loss outcomes, trail stops) on demand. The cron only fires
+  // hourly, so a trade that closes in between sits unrecorded in the Journal/
+  // Dashboard until the next tick — the frontend calls this on page load so those
+  // views reflect real trades as soon as possible instead of waiting on cron cadence.
+  app.post("/monitor", async (c) => {
+    try {
+      await monitorPositions({
+        DB:                    c.env.DB,
+        KV:                    c.env.KV,
+        CTRADER_CLIENT_ID:     c.env.CTRADER_CLIENT_ID,
+        CTRADER_CLIENT_SECRET: c.env.CTRADER_CLIENT_SECRET,
+        CTRADER_ACCOUNT_ID:    c.env.CTRADER_ACCOUNT_ID,
+        MARKET_DATA_PROVIDER:  c.env.MARKET_DATA_PROVIDER,
+        TWELVE_DATA_API_KEY:   c.env.TWELVE_DATA_API_KEY,
+      });
+      return c.json({ success: true });
+    } catch (e) {
+      return c.json({ error: (e as Error).message }, 502);
+    }
+  });
+
   // ── GET /api/v1/bot/cron-log ─────────────────────────────────────────────────
   app.get("/cron-log", async (c) => {
-    const { results } = await c.env.DB.prepare(
-      `SELECT id, session_name, pairs_scanned, recommendations_generated, created_at, duration_ms,
-              signals_found, signals_queued, signals_executed, error
-       FROM scan_runs ORDER BY created_at DESC LIMIT 100`
-    ).all();
-    return c.json(results);
+    const limit  = Math.min(Math.max(parseInt(c.req.query("limit")  ?? "50", 10) || 50, 1), 200);
+    const offset = Math.max(parseInt(c.req.query("offset") ?? "0", 10) || 0, 0);
+
+    const [{ results }, countRow] = await Promise.all([
+      c.env.DB.prepare(
+        `SELECT id, session_name, pairs_scanned, recommendations_generated, created_at, duration_ms,
+                signals_found, signals_queued, signals_executed, error
+         FROM scan_runs ORDER BY created_at DESC LIMIT ? OFFSET ?`
+      ).bind(limit, offset).all(),
+      c.env.DB.prepare(`SELECT COUNT(*) as count FROM scan_runs`).first<{ count: number }>(),
+    ]);
+
+    return c.json({ results, total: countRow?.count ?? 0, limit, offset });
   });
 
   // ── GET /api/v1/bot/status ────────────────────────────────────────────────────
   app.get("/status", async (c) => {
     await seedBotsFromLegacyKV(c.env.DB, c.env.KV);
+    await seedDefaultAccount(c.env.DB, c.env.KV, c.env.CTRADER_ACCOUNT_ID);
     const [bots, pending, recent] = await Promise.all([
       listBots(c.env.DB),
       getBotSignals(c.env.DB, { status: "pending", limit: 20 }),

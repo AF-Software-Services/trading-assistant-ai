@@ -167,25 +167,33 @@
 
       <!-- Top bar: tabs + drawing toolbar -->
       <div id="tab-bar">
-        <button class="tab-btn active" data-tab="chart">Chart</button>
-        <button class="tab-btn" data-tab="positions">Positions</button>
+        <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+        <button class="tab-btn" data-tab="chart" data-mobile-primary>Chart</button>
+        <button class="tab-btn" data-tab="positions" data-mobile-primary>Positions</button>
         <button class="tab-btn" data-tab="history">History</button>
         <button class="tab-btn" data-tab="journal">Journal</button>
         <button class="tab-btn" data-tab="news">News</button>
-        <button class="tab-btn" data-tab="ctrader">cTrader</button>
-        <button class="tab-btn" data-tab="bot">Bot</button>
+        <button class="tab-btn" data-tab="ctrader" data-mobile-primary>Trade</button>
+        <button class="tab-btn" data-tab="accounts">Accounts</button>
+        <button class="tab-btn" data-tab="bot" data-mobile-primary>Bot</button>
         <button class="tab-btn" data-tab="backtest">Backtest</button>
+
+        <!-- Mobile-only: opens the More sheet listing the less-frequent tabs above -->
+        <button class="tab-btn active" id="mobile-more-btn">
+          <span class="mobile-more-icon">⋯</span>
+          <span>More</span>
+        </button>
 
         <div class="tab-bar-separator"></div>
 
         <div id="risk-btn-wrap">
           <button id="risk-settings-btn" title="Risk Settings">⚙ Risk</button>
           <div id="risk-dropdown" class="hidden">
-            <div class="risk-dropdown-title">Risk Settings</div>
+            <div class="risk-dropdown-title">Account Balance</div>
             <div class="risk-dropdown-row">
-              <label for="risk-balance">Account Balance (£)</label>
-              <input type="number" id="risk-balance" min="100" max="1000000" step="100" value="10000" />
+              <span id="risk-balance-display" class="risk-balance-value">—</span>
             </div>
+            <div id="risk-balance-hint" class="risk-balance-hint hidden"></div>
             <div class="risk-dropdown-divider"></div>
             <div class="risk-dropdown-summary" style="font-size:11px;color:var(--muted)">
               Risk % and R:R are set per bot in the Bot tab.
@@ -194,8 +202,105 @@
         </div>
       </div>
 
+      <!-- Mobile-only: "More" sheet, lists tabs not shown in the bottom bar -->
+      <div id="mobile-more-overlay" class="hidden"></div>
+      <div id="mobile-more-sheet" class="hidden">
+        <div class="mobile-more-title">More</div>
+        <button class="mobile-more-item active" data-tab="dashboard">Dashboard</button>
+        <button class="mobile-more-item" data-tab="history">History</button>
+        <button class="mobile-more-item" data-tab="journal">Journal</button>
+        <button class="mobile-more-item" data-tab="news">News</button>
+        <button class="mobile-more-item" data-tab="accounts">Accounts</button>
+        <button class="mobile-more-item" data-tab="backtest">Backtest</button>
+      </div>
+
+      <!-- Dashboard tab -->
+      <div id="tab-dashboard" class="tab-panel active">
+        <div class="data-panel">
+          <div class="dash-header">
+            <h2>Dashboard</h2>
+            <button id="refresh-dashboard" class="small-btn">↻ Refresh</button>
+          </div>
+
+          <div id="dashboard-loading" class="hidden">Loading…</div>
+          <div id="dashboard-error" class="hidden" style="color:var(--sell)"></div>
+
+          <div id="dashboard-content" class="hidden">
+            <!-- Top summary: balance, open positions, win rate ring, streak -->
+            <div class="dash-summary-row">
+              <div class="dash-card">
+                <div class="dash-card-label">Account Balance</div>
+                <div id="dash-balance" class="dash-card-value">—</div>
+              </div>
+              <div class="dash-card">
+                <div class="dash-card-label">Open Positions</div>
+                <div id="dash-open-count" class="dash-card-value">—</div>
+                <div id="dash-open-pnl" class="dash-card-sub"></div>
+              </div>
+              <div class="dash-card dash-card-ring">
+                <div class="dash-card-label">Win Rate (All-Time)</div>
+                <div id="dash-winrate-ring"></div>
+              </div>
+              <div class="dash-card">
+                <div class="dash-card-label">Current Streak</div>
+                <div id="dash-streak" class="dash-card-value">—</div>
+              </div>
+            </div>
+
+            <!-- Open positions mini-list -->
+            <div id="dash-positions-list" class="dash-positions-list"></div>
+
+            <!-- Pending orders mini-list -->
+            <div id="dash-pending-orders-wrap" class="dash-panel-block hidden">
+              <div class="dash-panel-block-title">Pending Orders</div>
+              <div id="dash-pending-orders-list" class="dash-positions-list"></div>
+            </div>
+
+            <!-- Equity curve -->
+            <div class="dash-panel-block">
+              <div class="dash-panel-block-title">Equity Curve</div>
+              <div id="dash-equity-curve"></div>
+            </div>
+
+            <div class="dash-charts-row">
+              <!-- Wins vs losses by period -->
+              <div class="dash-panel-block">
+                <div class="dash-panel-block-title">Wins vs Losses</div>
+                <div id="dash-period-bars"></div>
+              </div>
+
+              <!-- P&L by pair -->
+              <div class="dash-panel-block">
+                <div class="dash-panel-block-title">P&amp;L by Pair (All-Time)</div>
+                <div id="dash-pair-bars"></div>
+              </div>
+            </div>
+
+            <!-- Period stats grid -->
+            <div class="dash-periods-grid">
+              <div class="dash-period-card">
+                <div class="dash-period-title">Today</div>
+                <div class="dash-period-body" id="dash-period-today"></div>
+              </div>
+              <div class="dash-period-card">
+                <div class="dash-period-title">This Week</div>
+                <div class="dash-period-body" id="dash-period-week"></div>
+              </div>
+              <div class="dash-period-card">
+                <div class="dash-period-title">This Month</div>
+                <div class="dash-period-body" id="dash-period-month"></div>
+              </div>
+              <div class="dash-period-card">
+                <div class="dash-period-title">This Year</div>
+                <div class="dash-period-body" id="dash-period-year"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Chart tab -->
-      <div id="tab-chart" class="tab-panel active">
+      <div id="tab-chart" class="tab-panel hidden">
         <div id="chart-container"></div>
         <div id="chart-loading" class="chart-overlay hidden">
           <div class="spinner"></div>
@@ -216,21 +321,48 @@
           <div id="positions-loading" class="panel-status hidden">Loading…</div>
           <div id="positions-error" class="panel-status error hidden"></div>
           <div id="positions-empty" class="panel-status hidden">No open positions.</div>
-          <table id="positions-table" class="data-table hidden">
-            <thead>
-              <tr>
-                <th>Pair</th>
-                <th>Dir</th>
-                <th>Lots</th>
-                <th>Open</th>
-                <th>SL</th>
-                <th>TP</th>
-                <th>Opened</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody id="positions-body"></tbody>
-          </table>
+          <div class="table-scroll">
+            <table id="positions-table" class="data-table hidden">
+              <thead>
+                <tr>
+                  <th>Account</th>
+                  <th>Pair</th>
+                  <th>Dir</th>
+                  <th>Lots</th>
+                  <th>Open</th>
+                  <th>SL</th>
+                  <th>TP</th>
+                  <th>Opened</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="positions-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="data-panel">
+          <div class="data-panel-header">
+            <span>Pending Orders</span>
+          </div>
+          <div id="pending-orders-empty" class="panel-status hidden">No pending orders.</div>
+          <div class="table-scroll">
+            <table id="pending-orders-table" class="data-table hidden">
+              <thead>
+                <tr>
+                  <th>Pair</th>
+                  <th>Dir</th>
+                  <th>Lots</th>
+                  <th>Limit Price</th>
+                  <th>SL</th>
+                  <th>TP</th>
+                  <th>Placed</th>
+                  <th>Expires</th>
+                </tr>
+              </thead>
+              <tbody id="pending-orders-body"></tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -258,25 +390,27 @@
           <div id="journal-error"   class="panel-status error hidden"></div>
           <div id="journal-empty"   class="panel-status hidden">No trades logged yet. Use the MCP <code>log_trade</code> tool or click + Log Trade.</div>
 
-          <table id="journal-table" class="data-table hidden">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Pair</th>
-                <th>Dir</th>
-                <th>Entry</th>
-                <th>SL</th>
-                <th>TP</th>
-                <th>R:R</th>
-                <th>Session</th>
-                <th>Signal</th>
-                <th>Result</th>
-                <th>Pips</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="journal-body"></tbody>
-          </table>
+          <div class="table-scroll">
+            <table id="journal-table" class="data-table hidden">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Pair</th>
+                  <th>Dir</th>
+                  <th>Entry</th>
+                  <th>SL</th>
+                  <th>TP</th>
+                  <th>R:R</th>
+                  <th>Session</th>
+                  <th>Signal</th>
+                  <th>Result</th>
+                  <th>Pips</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="journal-body"></tbody>
+            </table>
+          </div>
         </div>
 
         <!-- Log trade form (hidden until + Log Trade clicked) -->
@@ -372,20 +506,22 @@
           <div id="history-loading" class="panel-status hidden">Loading…</div>
           <div id="history-error" class="panel-status error hidden"></div>
           <div id="history-empty" class="panel-status hidden">No trade history found.</div>
-          <table id="history-table" class="data-table hidden">
-            <thead>
-              <tr>
-                <th>Pair</th>
-                <th>Dir</th>
-                <th>Lots</th>
-                <th>Entry</th>
-                <th>Close</th>
-                <th>Closed</th>
-                <th>P&amp;L</th>
-              </tr>
-            </thead>
-            <tbody id="history-body"></tbody>
-          </table>
+          <div class="table-scroll">
+            <table id="history-table" class="data-table hidden">
+              <thead>
+                <tr>
+                  <th>Pair</th>
+                  <th>Dir</th>
+                  <th>Lots</th>
+                  <th>Entry</th>
+                  <th>Close</th>
+                  <th>Date</th>
+                  <th>P&amp;L</th>
+                </tr>
+              </thead>
+              <tbody id="history-body"></tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -420,6 +556,11 @@
 
             <div id="ctrader-trade-form" class="ctrader-trade-form hidden">
               <h3 class="trade-form-title">Place Manual Trade</h3>
+              <div class="trade-form-grid" style="margin-bottom:8px">
+                <label>Account
+                  <select id="trade-account"></select>
+                </label>
+              </div>
               <div class="trade-type-toggle">
                 <button id="trade-type-market" class="trade-type-btn trade-type-active">Market</button>
                 <button id="trade-type-limit"  class="trade-type-btn">Limit</button>
@@ -466,11 +607,63 @@
         </div>
       </div>
 
+      <!-- Accounts tab -->
+      <div id="tab-accounts" class="tab-panel hidden">
+
+        <!-- Accounts panel -->
+        <div class="data-panel" id="accounts-panel">
+          <div class="data-panel-header">
+            <span>Accounts</span>
+            <button id="account-add-btn" class="small-btn primary-btn">+ Add Account</button>
+          </div>
+          <p class="ctrader-tab-hint">Accounts connected here are available for both manual trades (cTrader tab) and automated bots (Bot tab).</p>
+          <div id="accounts-list">
+            <div class="bot-no-signals">Loading accounts…</div>
+          </div>
+        </div>
+
+        <!-- Add Account modal -->
+        <div id="account-add-modal" class="modal-overlay hidden">
+          <div class="modal-box">
+            <div class="modal-title">Add Trading Account</div>
+            <div class="modal-field">
+              <label>Name</label>
+              <input type="text" id="acct-new-name" placeholder="e.g. Live GBP Account" />
+            </div>
+            <div class="modal-field">
+              <label>Type</label>
+              <select id="acct-new-type" class="small-select" style="width:100%;padding:6px">
+                <option value="demo">Demo</option>
+                <option value="live">Live</option>
+              </select>
+            </div>
+            <div class="modal-field">
+              <label>cTrader Account ID</label>
+              <input type="text" id="acct-new-ctrader-id" placeholder="e.g. 12345678" />
+              <div style="font-size:10px;color:var(--muted);margin-top:4px">Found in cTrader → My Profile → Account List</div>
+            </div>
+            <div class="modal-field">
+              <label>Currency</label>
+              <select id="acct-new-currency" class="small-select" style="width:100%;padding:6px">
+                <option value="GBP">GBP</option>
+                <option value="USD">USD</option>
+                <option value="EUR">EUR</option>
+              </select>
+            </div>
+            <div class="modal-actions">
+              <button id="acct-add-cancel-btn" class="small-btn">Cancel</button>
+              <button id="acct-add-confirm-btn" class="small-btn primary-btn">Add Account</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
       <!-- Bot tab -->
       <div id="tab-bot" class="tab-panel hidden">
 
         <!-- Bot list -->
-        <div class="data-panel">
+        <div class="data-panel" style="margin-top:12px">
           <div class="data-panel-header">
             <span>Bots</span>
             <div class="header-controls">
@@ -533,6 +726,12 @@
                 <label><input type="checkbox" class="bot-new-pair" value="EUR/GBP" /> EUR/GBP</label>
                 <label><input type="checkbox" class="bot-new-pair" value="AUD/USD" /> AUD/USD</label>
               </div>
+            </div>
+            <div class="modal-field">
+              <label>Account</label>
+              <select id="bot-new-account" class="small-select" style="width:100%;padding:6px">
+                <option value="">— No account assigned —</option>
+              </select>
             </div>
             <div class="modal-actions">
               <button id="bot-add-cancel-btn" class="small-btn">Cancel</button>
@@ -597,7 +796,10 @@
           <div id="backtest-results" class="hidden">
             <div class="data-panel-header" style="margin-top:16px">
               <span id="bt-results-title">Results</span>
-              <button id="bt-delete-btn" class="small-btn danger">✕ Delete Run</button>
+              <div class="header-controls">
+                <button id="bt-close-btn" class="small-btn">Close</button>
+                <button id="bt-delete-btn" class="small-btn danger">✕ Delete Run</button>
+              </div>
             </div>
 
             <!-- Stats cards -->

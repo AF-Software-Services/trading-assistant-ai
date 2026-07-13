@@ -22,6 +22,7 @@ import {
   runBotScan,
 } from "../bot/engine.ts";
 import { TradingService } from "../trading/service.ts";
+import { getPrimaryAccountBalance } from "../ctrader/account-types.ts";
 
 // Re-export Env shape expected by tools
 export interface Env {
@@ -47,17 +48,17 @@ export function registerTools(server: McpServer, env: Env): void {
   // ── 1. analyse_pair ─────────────────────────────────────────────────────────
   server.tool(
     "analyse_pair",
-    "Analyse a currency pair using the trendline bot strategy: detects 4H trendline break+retest setups with daily bias filter. Returns a live signal if conditions are met — identical logic to what the live bot and backtests use. Risk settings are read from saved Trading Assistant settings unless overridden.",
+    "Analyse a currency pair using the trendline bot strategy: detects 4H trendline break+retest setups with daily bias filter. Returns a live signal if conditions are met — identical logic to what the live bot and backtests use. Position sizing uses the real connected cTrader account balance.",
     {
-      pair:           z.enum(["EUR/USD", "GBP/USD", "GBP/CAD", "USD/JPY", "EUR/GBP", "AUD/USD"]),
-      accountBalance: z.number().positive().optional().describe("Override only — normally read from saved settings"),
-      riskPercent:    z.number().min(0.1).max(10).optional().describe("Override only — normally read from saved settings"),
-      rewardRisk:     z.number().min(1).max(10).optional().describe("Override only — normally read from saved settings"),
+      pair:        z.enum(["EUR/USD", "GBP/USD", "GBP/CAD", "USD/JPY", "EUR/GBP", "AUD/USD"]),
+      riskPercent: z.number().min(0.1).max(10).optional().describe("Override only — normally read from saved settings"),
+      rewardRisk:  z.number().min(1).max(10).optional().describe("Override only — normally read from saved settings"),
     },
-    async ({ pair, accountBalance, riskPercent, rewardRisk }) => {
-      const savedSettings = await env.KV.get("user:risk_settings", "json") as
-        { accountBalance?: number; riskPercent?: number; rewardRisk?: number } | null;
-      const resolvedBalance = accountBalance ?? savedSettings?.accountBalance;
+    async ({ pair, riskPercent, rewardRisk }) => {
+      const [savedSettings, resolvedBalance] = await Promise.all([
+        env.KV.get("user:risk_settings", "json") as Promise<{ riskPercent?: number; rewardRisk?: number } | null>,
+        getPrimaryAccountBalance(env.DB),
+      ]);
       const resolvedRiskPct = riskPercent    ?? savedSettings?.riskPercent;
       const rrRatio         = rewardRisk     ?? savedSettings?.rewardRisk ?? 3.0;
       const riskAmount      = resolvedBalance && resolvedRiskPct
@@ -65,7 +66,7 @@ export function registerTools(server: McpServer, env: Env): void {
 
       const [candles4H, candlesD, tick] = await Promise.all([
         provider.getCandles(pair as CurrencyPair, "4H",   200),
-        provider.getCandles(pair as CurrencyPair, "1day",  30),
+        provider.getCandles(pair as CurrencyPair, "D",     30),
         provider.getLatestPrice(pair as CurrencyPair),
       ]);
 
@@ -108,8 +109,10 @@ export function registerTools(server: McpServer, env: Env): void {
           riskPercent:    resolvedRiskPct ?? null,
           maxRiskAmount:  riskAmount ?? null,
           rewardRisk:     rrRatio,
-          warning: !resolvedBalance || !resolvedRiskPct
-            ? "No risk settings saved — call set_risk_settings to enable position sizing."
+          warning: !resolvedBalance
+            ? "No connected cTrader account with a known balance — connect an account in the Accounts tab."
+            : !resolvedRiskPct
+            ? "No risk % saved — call set_risk_settings to enable position sizing."
             : null,
         },
       });
@@ -119,29 +122,28 @@ export function registerTools(server: McpServer, env: Env): void {
   // ── 2. get_risk_settings ─────────────────────────────────────────────────────
   server.tool(
     "get_risk_settings",
-    "Read the user's saved risk settings from their Trading Assistant app: account balance, risk per trade %, and minimum R:R ratio. Call this if you need to know the user's current settings without running a full analysis.",
+    "Read the user's current risk settings: real connected cTrader account balance, risk per trade %, and minimum R:R ratio. Call this if you need to know the user's current settings without running a full analysis.",
     {},
     async () => {
-      const settings = await env.KV.get("user:risk_settings", "json") as
-        { accountBalance?: number; riskPercent?: number; rewardRisk?: number } | null;
-      if (!settings) {
-        return json({
-          configured: false,
-          message: "No risk settings saved yet. The user can set these in the ⚙ Risk dropdown in the Trading Assistant UI.",
-          defaults: { accountBalance: null, riskPercent: null, rewardRisk: 1.2 },
-        });
-      }
-      const maxRisk = settings.accountBalance && settings.riskPercent
-        ? settings.accountBalance * (settings.riskPercent / 100) : null;
+      const [settings, accountBalance] = await Promise.all([
+        env.KV.get("user:risk_settings", "json") as Promise<{ riskPercent?: number; rewardRisk?: number } | null>,
+        getPrimaryAccountBalance(env.DB),
+      ]);
+      const riskPercent = settings?.riskPercent ?? null;
+      const rewardRisk  = settings?.rewardRisk  ?? 1.2;
+      const maxRisk = accountBalance && riskPercent
+        ? accountBalance * (riskPercent / 100) : null;
       return json({
-        configured: true,
-        accountBalance: settings.accountBalance ?? null,
-        riskPercent:    settings.riskPercent    ?? null,
-        rewardRisk:     settings.rewardRisk      ?? 1.2,
+        configured: accountBalance != null && riskPercent != null,
+        accountBalance,
+        riskPercent,
+        rewardRisk,
         maxRiskPerTrade: maxRisk,
         summary: maxRisk
-          ? `Account £${settings.accountBalance?.toLocaleString()}, risking ${settings.riskPercent}% (£${maxRisk.toFixed(2)}) per trade, min R:R ${settings.rewardRisk ?? 1.2}`
-          : "Settings partially configured — accountBalance or riskPercent missing.",
+          ? `Account £${accountBalance?.toLocaleString()}, risking ${riskPercent}% (£${maxRisk.toFixed(2)}) per trade, min R:R ${rewardRisk}`
+          : !accountBalance
+          ? "No connected cTrader account with a known balance — connect an account in the Accounts tab."
+          : "No risk % saved — call set_risk_settings.",
       });
     }
   );
@@ -149,31 +151,30 @@ export function registerTools(server: McpServer, env: Env): void {
   // ── 3. set_risk_settings ─────────────────────────────────────────────────────
   server.tool(
     "set_risk_settings",
-    "Save the user's risk settings so they are automatically applied to all future analyses. Only saves fields that are provided — omit a field to leave it unchanged.",
+    "Save the user's risk per trade % and minimum R:R ratio, applied to all future analyses. Account balance is not settable — it's always read live from the connected cTrader account. Only saves fields that are provided — omit a field to leave it unchanged.",
     {
-      accountBalance: z.number().positive().optional().describe("Total account size in £"),
-      riskPercent:    z.number().min(0.1).max(10).optional().describe("Risk per trade as % of account"),
-      rewardRisk:     z.number().min(1).max(10).optional().describe("Minimum R:R ratio (default 1.2)"),
+      riskPercent: z.number().min(0.1).max(10).optional().describe("Risk per trade as % of account"),
+      rewardRisk:  z.number().min(1).max(10).optional().describe("Minimum R:R ratio (default 1.2)"),
     },
-    async ({ accountBalance, riskPercent, rewardRisk }) => {
+    async ({ riskPercent, rewardRisk }) => {
       const existing = await env.KV.get("user:risk_settings", "json") as
-        { accountBalance?: number; riskPercent?: number; rewardRisk?: number } | null ?? {};
+        { riskPercent?: number; rewardRisk?: number } | null ?? {};
       const updated = {
         ...existing,
-        ...(accountBalance !== undefined && { accountBalance }),
-        ...(riskPercent    !== undefined && { riskPercent }),
-        ...(rewardRisk     !== undefined && { rewardRisk }),
+        ...(riskPercent !== undefined && { riskPercent }),
+        ...(rewardRisk  !== undefined && { rewardRisk }),
       };
       await env.KV.put("user:risk_settings", JSON.stringify(updated));
-      const maxRisk = updated.accountBalance && updated.riskPercent
-        ? updated.accountBalance * (updated.riskPercent / 100) : null;
+      const accountBalance = await getPrimaryAccountBalance(env.DB);
+      const maxRisk = accountBalance && updated.riskPercent
+        ? accountBalance * (updated.riskPercent / 100) : null;
       return json({
         saved: true,
-        settings: updated,
+        settings: { ...updated, accountBalance },
         maxRiskPerTrade: maxRisk,
         summary: maxRisk
-          ? `Saved: Account £${updated.accountBalance?.toLocaleString()}, ${updated.riskPercent}% risk = £${maxRisk.toFixed(2)} per trade, R:R ${updated.rewardRisk ?? 1.2}`
-          : "Saved (partial — provide both accountBalance and riskPercent to enable position sizing).",
+          ? `Saved: ${updated.riskPercent}% risk on account £${accountBalance?.toLocaleString()} = £${maxRisk.toFixed(2)} per trade, R:R ${updated.rewardRisk ?? 1.2}`
+          : "Saved risk %, but no connected account balance yet — connect an account in the Accounts tab to enable position sizing.",
       });
     }
   );
@@ -197,7 +198,7 @@ export function registerTools(server: McpServer, env: Env): void {
 
       const [candles4H, candlesD] = await Promise.all([
         provider.getCandles(p, "4H",   200),
-        provider.getCandles(p, "1day",  30),
+        provider.getCandles(p, "D",     30),
       ]);
       const dailyBias = getDailyBias(candlesD);
       const tlSignal  = detectTrendlineSignal(candles4H, 3.0, 5, candlesD);
@@ -300,7 +301,7 @@ export function registerTools(server: McpServer, env: Env): void {
       let candlesD:  Array<{ open: number; high: number; low: number; close: number }> = [];
       try {
         const raw4h = await provider.getCandles(pair, "4H", 20);
-        const rawD  = await provider.getCandles(pair, "1day", 10);
+        const rawD  = await provider.getCandles(pair, "D", 10);
         candles4h = raw4h.map(c => ({ open: c.open, high: c.high, low: c.low, close: c.close }));
         candlesD  = rawD.map(c => ({ open: c.open, high: c.high, low: c.low, close: c.close }));
       } catch { /* candle snapshot is best-effort */ }

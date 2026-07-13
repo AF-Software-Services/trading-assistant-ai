@@ -1,5 +1,7 @@
-import { CTraderClient, SYMBOL_IDS } from "../ctrader/client.ts";
+import { CTraderClient } from "../ctrader/client.ts";
 import type { Position, Deal }        from "../ctrader/client.ts";
+import type { CTraderAccount }        from "../ctrader/account-types.ts";
+import { tokenKey }                   from "../ctrader/account-types.ts";
 
 export type { Position, Deal };
 
@@ -10,37 +12,41 @@ export interface CTraderEnv {
   CTRADER_ACCOUNT_ID:    string;
 }
 
-/**
- * Domain service for live trading operations.
- *
- * Owns the pattern: resolve token → build CTraderClient → call API.
- * Callers work with pair names and domain concepts (lots, pairs);
- * protocol details (symbolIds, volume units) stay inside this layer.
- */
 export class TradingService {
   private constructor(private readonly client: CTraderClient) {}
 
-  /** Connects or throws if no token is stored. */
+  /** Connect to a specific account stored in the accounts table. */
+  static async connectToAccount(
+    env: Pick<CTraderEnv, 'KV' | 'CTRADER_CLIENT_ID' | 'CTRADER_CLIENT_SECRET'>,
+    account: CTraderAccount,
+  ): Promise<TradingService> {
+    const token = await env.KV.get(tokenKey(account.id));
+    if (!token) throw new Error(`cTrader account "${account.name}" is not connected`);
+    return new TradingService(buildClientForAccount(env, account, token));
+  }
+
+  /** Connect to a specific account, returns null if not connected. */
+  static async tryConnectToAccount(
+    env: Pick<CTraderEnv, 'KV' | 'CTRADER_CLIENT_ID' | 'CTRADER_CLIENT_SECRET'>,
+    account: CTraderAccount,
+  ): Promise<TradingService | null> {
+    const token = await env.KV.get(tokenKey(account.id));
+    if (!token) return null;
+    return new TradingService(buildClientForAccount(env, account, token));
+  }
+
+  /** Legacy: connect using env vars + global KV token (single-account mode). */
   static async connect(env: CTraderEnv): Promise<TradingService> {
     const token = await env.KV.get("ctrader:access_token");
     if (!token) throw new Error("Not connected to cTrader");
-    return new TradingService(TradingService.buildClient(env, token));
+    return new TradingService(buildClientFromEnv(env, token));
   }
 
-  /** Connects or returns null — use when cTrader is optional. */
+  /** Legacy: connect or return null if no token. */
   static async tryConnect(env: CTraderEnv): Promise<TradingService | null> {
     const token = await env.KV.get("ctrader:access_token");
     if (!token) return null;
-    return new TradingService(TradingService.buildClient(env, token));
-  }
-
-  private static buildClient(env: CTraderEnv, token: string): CTraderClient {
-    return new CTraderClient({
-      clientId:     env.CTRADER_CLIENT_ID,
-      clientSecret: env.CTRADER_CLIENT_SECRET,
-      accessToken:  token,
-      accountId:    parseInt(env.CTRADER_ACCOUNT_ID),
-    });
+    return new TradingService(buildClientFromEnv(env, token));
   }
 
   async placeOrder(params: {
@@ -51,10 +57,8 @@ export class TradingService {
     stopLoss?:   number;
     takeProfit?: number;
   }): Promise<{ orderId: number }> {
-    const symbolId = SYMBOL_IDS[params.pair];
-    if (!symbolId) throw new Error(`Unknown pair: ${params.pair}`);
     return this.client.placeOrder({
-      symbolId,
+      pair:       params.pair,
       direction:  params.direction,
       lots:       params.lots,
       limitPrice: params.limitPrice,
@@ -67,10 +71,10 @@ export class TradingService {
     return this.client.getPositions();
   }
 
-  /**
-   * Closes a position. If volume is not supplied, fetches it from open positions.
-   * Throws if the position cannot be found.
-   */
+  async getBalance(): Promise<{ balance: number; traderLogin: number | null }> {
+    return this.client.getBalance();
+  }
+
   async closePosition(positionId: number, volume?: number): Promise<void> {
     let vol = volume;
     if (vol === undefined) {
@@ -93,4 +97,28 @@ export class TradingService {
   async getHistory(fromMs: number, toMs: number): Promise<Deal[]> {
     return this.client.getHistory(fromMs, toMs);
   }
+}
+
+function buildClientForAccount(
+  env: Pick<CTraderEnv, 'CTRADER_CLIENT_ID' | 'CTRADER_CLIENT_SECRET'>,
+  account: CTraderAccount,
+  token: string,
+): CTraderClient {
+  return new CTraderClient({
+    clientId:     env.CTRADER_CLIENT_ID,
+    clientSecret: env.CTRADER_CLIENT_SECRET,
+    accessToken:  token,
+    accountId:    parseInt(account.ctraderAccountId),
+    accountType:  account.type,
+  });
+}
+
+function buildClientFromEnv(env: CTraderEnv, token: string): CTraderClient {
+  return new CTraderClient({
+    clientId:     env.CTRADER_CLIENT_ID,
+    clientSecret: env.CTRADER_CLIENT_SECRET,
+    accessToken:  token,
+    accountId:    parseInt(env.CTRADER_ACCOUNT_ID),
+    accountType:  'demo',
+  });
 }

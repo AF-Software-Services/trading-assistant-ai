@@ -18,7 +18,10 @@ export class TwelveDataProvider implements MarketDataProvider {
     const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=${interval}&outputsize=${count}&apikey=${this.apiKey}&format=JSON`;
 
     const res = await fetch(url, { cf: { cacheEverything: false } } as RequestInit);
-    if (!res.ok) throw new Error(`Twelve Data HTTP ${res.status}`);
+    if (!res.ok) {
+      const bodyText = await res.text().catch(() => '');
+      throw new Error(`Twelve Data HTTP ${res.status}: ${bodyText.slice(0, 200)}`);
+    }
 
     const data = await res.json() as { status?: string; message?: string; values?: Array<{ datetime: string; open: string; high: string; low: string; close: string }> };
 

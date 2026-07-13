@@ -162,11 +162,16 @@ function buildLines(
 
   // Anchor from the most significant point first:
   // Bearish → highest swing high; bullish → lowest swing low
+  // Only the top 4 resulting lines are ever kept (see slice(0, 4) below), and the strongest
+  // anchors are overwhelmingly where winning lines come from — so cap the anchor candidates
+  // here too. Without this, cost scales O(swings²) with however many swings a volatile pair
+  // happens to have; capping bounds it to O(MAX_ANCHORS × swings) regardless.
+  const MAX_ANCHORS = 15;
   const sortedBySignificance = [...swings].sort((a, b) =>
     type === "resistance"
       ? candles[b]!.high - candles[a]!.high  // highest first
       : candles[a]!.low  - candles[b]!.low   // lowest first
-  );
+  ).slice(0, MAX_ANCHORS);
 
   for (const anchorIdx of sortedBySignificance) {
     const priceA = type === "resistance" ? candles[anchorIdx]!.high : candles[anchorIdx]!.low;

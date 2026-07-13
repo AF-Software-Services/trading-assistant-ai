@@ -5,6 +5,7 @@ import { createCTraderRouter } from "./ctrader/routes.ts";
 import { createBotRouter }     from "./bot/routes.ts";
 import { handleCronTrigger } from "./scheduler/cron.ts";
 import { createBacktestRouter } from "./backtest/routes.ts";
+import { createDashboardRouter } from "./dashboard/routes.ts";
 
 export interface Env {
   DB: D1Database;
@@ -15,7 +16,6 @@ export interface Env {
   CTRADER_CLIENT_ID: string;
   CTRADER_CLIENT_SECRET: string;
   CTRADER_ACCOUNT_ID: string;
-  DEV_MODE?: string;
 }
 
 const app = new Hono<{ Bindings: Env }>();
@@ -53,6 +53,10 @@ app.route("/api/v1/bot", botRouter);
 // ── Backtest ──────────────────────────────────────────────────────────────────
 const backtestRouter = createBacktestRouter();
 app.route("/", backtestRouter);
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+const dashboardRouter = createDashboardRouter();
+app.route("/", dashboardRouter);
 
 // ── Cloudflare Worker export ──────────────────────────────────────────────────
 export default {

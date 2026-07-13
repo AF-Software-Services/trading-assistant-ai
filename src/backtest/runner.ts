@@ -65,12 +65,13 @@ async function fetchCandlesFromAPI(
   endDate: string,
   apiKey: string,
 ): Promise<Candle[]> {
-  // Retry up to 3 times on 429, with 15s backoff — no preventive delays
+  // Retry up to 3 times on 429, with a short backoff — just a safety net now that
+  // the account has real per-minute headroom; no preventive pacing delays needed.
   for (let attempt = 0; attempt < 3; attempt++) {
     const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(pair)}&interval=${interval}&start_date=${startDate}&end_date=${endDate}&outputsize=5000&apikey=${apiKey}`;
     const res = await fetch(url);
     if (res.status === 429) {
-      if (attempt < 2) { await delay(15000); continue; }
+      if (attempt < 2) { await delay(5000); continue; }
       throw new Error(`Twelve Data HTTP 429 for ${pair} ${interval} (rate limited after retries)`);
     }
     if (!res.ok) throw new Error(`Twelve Data HTTP ${res.status} for ${pair} ${interval}`);
@@ -204,20 +205,24 @@ export async function runTrendlineBacktest(
   const lastSignalMs: Record<string, number> = {};
   const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 
-  for (const pair of config.pairs) {
-    progress(`Fetching data for ${pair}…`);
-
-    let candles4H: Candle[];
-    let candlesD:  Candle[];
+  // Fetch every pair's candles in parallel rather than one-at-a-time — the account's
+  // per-minute rate limit has real headroom now, so there's no need to pace requests out.
+  progress(`Fetching data for ${config.pairs.length} pairs…`);
+  const fetchResults = await Promise.all(config.pairs.map(async (pair) => {
     try {
-      const r4H = await fetchCandles(pair, "4h",   fetchFrom, fetchTo, apiKey, kv);
-      if (!r4H.fromCache) await delay(8000);
-      const rD  = await fetchCandles(pair, "1day", fetchFrom, fetchTo, apiKey, kv);
-      if (!rD.fromCache)  await delay(8000);
-      candles4H = r4H.candles;
-      candlesD  = rD.candles;
+      const [r4H, rD] = await Promise.all([
+        fetchCandles(pair, "4h",   fetchFrom, fetchTo, apiKey, kv),
+        fetchCandles(pair, "1day", fetchFrom, fetchTo, apiKey, kv),
+      ]);
+      return { pair, candles4H: r4H.candles, candlesD: rD.candles, error: null as string | null };
     } catch (err) {
-      progress(`Error fetching ${pair}: ${(err as Error).message}`);
+      return { pair, candles4H: [] as Candle[], candlesD: [] as Candle[], error: (err as Error).message };
+    }
+  }));
+
+  for (const { pair, candles4H, candlesD, error } of fetchResults) {
+    if (error) {
+      progress(`Error fetching ${pair}: ${error}`);
       continue;
     }
 

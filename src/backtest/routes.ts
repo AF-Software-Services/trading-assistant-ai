@@ -4,6 +4,7 @@ import { runTrendlineBacktest, buildSummary } from "./runner.ts";
 import type { BacktestConfig, BacktestResult } from "./runner.ts";
 import { saveBotSignal } from "../bot/engine.ts";
 import { getBot } from "../bot/bot-types.ts";
+import { getAccount, getPrimaryAccountBalance } from "../ctrader/account-types.ts";
 
 
 export function createBacktestRouter() {
@@ -24,10 +25,14 @@ export function createBacktestRouter() {
     ]);
     if (!botInstance) return c.json({ error: "Bot not found" }, 404);
 
+    // Starting capital is the bot's own linked account's real cTrader balance — falls back to
+    // any other connected account's balance, then a safe placeholder if nothing is connected yet.
+    const botAccount = botInstance.accountId ? await getAccount(c.env.DB, botInstance.accountId) : null;
+    const accountBalance = botAccount?.balance ?? await getPrimaryAccountBalance(c.env.DB) ?? 1000;
+
     // Execution constraints come from the bot with no fallback — must match the live run exactly.
     // Sizing params (riskPercent, rewardRisk) fall back to global risk settings for bots that
     // pre-date those fields being saved on the bot card.
-    const accountBalance     = riskRaw?.accountBalance ?? 1000;
     const riskPercent        = (botInstance.settings["riskPercent"]  as number | undefined) ?? (riskRaw?.riskPercent  ?? 1);
     const rewardRisk         = (botInstance.settings["rewardRisk"]   as number | undefined) ?? (riskRaw?.rewardRisk   ?? 1.5);
     const minScore           = botInstance.settings["minConfidenceScore"] as number;
@@ -70,19 +75,25 @@ export function createBacktestRouter() {
       }
     };
 
-    // In dev mode run synchronously — waitUntil() is cancelled too early by wrangler dev --remote.
-    // In production use waitUntil() so the HTTP response returns immediately.
-    if (c.env.DEV_MODE === 'true') {
-      await runBacktest();
-    } else {
-      c.executionCtx.waitUntil(runBacktest());
-    }
+    // Run synchronously rather than via waitUntil() — waitUntil has its own separate,
+    // shorter wall-clock cap on background execution (independent of the CPU time limit),
+    // and backtests were hitting that cap even when comfortably within the CPU budget.
+    // The request just takes as long as the backtest actually takes.
+    await runBacktest();
 
     return c.json({ runId });
   });
 
   // GET /api/v1/backtest/runs
   router.get("/api/v1/backtest/runs", async (c) => {
+    // Self-healing: a run stuck in 'running' for more than 3 minutes almost certainly means
+    // the Worker was killed mid-execution (its catch/finally never got to run), not that it's
+    // still working — a full parallel-fetch run now finishes in well under a minute.
+    await c.env.DB.prepare(
+      `UPDATE backtest_runs SET status='failed', completed_at=?, error='Timed out — worker likely killed mid-run'
+       WHERE status='running' AND started_at < ?`
+    ).bind(Date.now(), Date.now() - 3 * 60 * 1000).run();
+
     const { results } = await c.env.DB.prepare(
       `SELECT * FROM backtest_runs ORDER BY started_at DESC LIMIT 50`
     ).all();

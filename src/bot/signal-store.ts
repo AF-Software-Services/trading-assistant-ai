@@ -7,7 +7,6 @@ export interface BotSettings {
   maxOpenPositions:   number;
   allowDuplicatePairs: boolean;
   dailyLossLimitPct:  number;
-  allowedSessions:    string[];
   pairs:              string[];
 }
 
@@ -64,7 +63,6 @@ export async function getBotSettings(kv: KVNamespace): Promise<BotSettings> {
     maxOpenPositions:    saved?.maxOpenPositions    ?? 2,
     allowDuplicatePairs: saved?.allowDuplicatePairs ?? false,
     dailyLossLimitPct:  saved?.dailyLossLimitPct  ?? 2,
-    allowedSessions:    saved?.allowedSessions    ?? ["london", "ny", "overlap_london_ny"],
     pairs:              saved?.pairs              ?? [],
   };
 }
@@ -211,6 +209,13 @@ export async function updateBotSignalStatus(
     extra.errorMessage        ?? null,
     id
   ).run();
+}
+
+// updateBotSignalStatus's COALESCE-based update can only set journal_id, never clear it back
+// to NULL — needed when a signal's order never filled and its journal row gets deleted as a
+// phantom trade (see monitor.ts), so the dangling reference doesn't outlive the row it points to.
+export async function clearBotSignalJournalId(db: D1Database, id: string): Promise<void> {
+  await db.prepare(`UPDATE bot_signals SET journal_id = NULL WHERE id = ?`).bind(id).run();
 }
 
 function rowToSignal(row: Record<string, unknown>): BotSignal {
