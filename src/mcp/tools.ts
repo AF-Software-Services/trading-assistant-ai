@@ -14,13 +14,13 @@ import {
   buildFeaturesFromContext,
 } from "../storage/journal.ts";
 import {
-  getBotSettings,
-  saveBotSettings,
   getBotSignals,
   updateBotSignalStatus,
   executeSignal,
   runBotScan,
 } from "../bot/engine.ts";
+import { listBots, updateBot } from "../bot/bot-types.ts";
+import type { BotInstance } from "../bot/bot-types.ts";
 import { TradingService } from "../trading/service.ts";
 import { getPrimaryAccountBalance } from "../ctrader/account-types.ts";
 
@@ -31,6 +31,9 @@ export interface Env {
   ENVIRONMENT: string;
   MARKET_DATA_PROVIDER: string;
   TWELVE_DATA_API_KEY: string;
+  CTRADER_CLIENT_ID: string;
+  CTRADER_CLIENT_SECRET: string;
+  CTRADER_ACCOUNT_ID: string;
 }
 
 
@@ -429,37 +432,60 @@ export function registerTools(server: McpServer, env: Env): void {
   // ── 19. set_bot_mode ─────────────────────────────────────────────────────────
   server.tool(
     "set_bot_mode",
-    "Set the trading bot mode. 'off' = no automatic trading. 'approval' = bot finds setups and queues them for your review — you approve each trade before it executes. 'autonomous' = bot executes qualifying setups automatically without asking. Also configure min score threshold, max open positions, and which sessions to trade.",
+    "Set a trading bot's mode. 'off' = no automatic trading. 'approval' = bot finds setups and queues them for your review — you approve each trade before it executes. 'autonomous' = bot executes qualifying setups automatically without asking. This operates on your real bot(s) from the Bot tab — the same ones the live cron job runs. If you have more than one bot, pass botId (use get_bot_status to see IDs); with exactly one bot configured, botId can be omitted.",
     {
       mode:             z.enum(["off", "approval", "autonomous"]),
-      minScore:         z.number().min(0).max(100).optional().describe("Minimum signal score to act on (default 65)"),
-      maxOpenPositions: z.number().min(1).max(10).optional().describe("Max concurrent open positions (default 2)"),
-      dailyLossLimitPct:z.number().min(0).max(10).optional().describe("Daily loss limit as % of account (default 2)"),
-      pairs:            z.array(z.string()).optional().describe("Pairs to trade, empty = all 6 pairs"),
+      botId:            z.string().optional().describe("Bot ID (or its first 8 chars) to target — required only if you have more than one bot"),
+      minScore:         z.number().min(0).max(100).optional().describe("Minimum signal confidence score to act on"),
+      maxOpenPositions: z.number().min(1).max(10).optional().describe("Max concurrent open positions"),
+      pairs:            z.array(z.enum(["EUR/USD", "GBP/USD", "GBP/CAD", "USD/JPY", "EUR/GBP", "AUD/USD"])).optional().describe("Pairs this bot trades — omit or empty for all 6"),
     },
-    async ({ mode, minScore, maxOpenPositions, dailyLossLimitPct, pairs }) => {
-      const settings = await saveBotSettings(env.KV, {
+    async ({ mode, botId, minScore, maxOpenPositions, pairs }) => {
+      const bots = await listBots(env.DB);
+      if (bots.length === 0) {
+        return text("No bots configured yet — create one in the Bot tab first.");
+      }
+
+      let target: BotInstance;
+      if (botId) {
+        const found = bots.find(b => b.id === botId || b.id.startsWith(botId));
+        if (!found) {
+          return text(`No bot found with ID starting with "${botId}". Your bots:\n` +
+            bots.map(b => `  ${b.name} — ${b.id}`).join("\n"));
+        }
+        target = found;
+      } else if (bots.length === 1) {
+        target = bots[0]!;
+      } else {
+        return text(`You have ${bots.length} bots — pass botId to target one specifically:\n` +
+          bots.map(b => `  ${b.name} [${b.mode}] — ${b.id}`).join("\n"));
+      }
+
+      const newSettings: Record<string, unknown> = { ...target.settings };
+      if (minScore !== undefined) newSettings.minConfidenceScore = minScore;
+      if (maxOpenPositions !== undefined) newSettings.maxOpenPositions = maxOpenPositions;
+
+      const updated = await updateBot(env.DB, target.id, {
         mode,
-        ...(minScore          !== undefined ? { minScore }          : {}),
-        ...(maxOpenPositions  !== undefined ? { maxOpenPositions }  : {}),
-        ...(dailyLossLimitPct !== undefined ? { dailyLossLimitPct } : {}),
-        ...(pairs             !== undefined ? { pairs }             : {}),
+        settings: newSettings,
+        ...(pairs !== undefined ? { pairs: pairs as CurrencyPair[] } : {}),
       });
+      if (!updated) return text(`Bot ${target.id} was not found when saving — it may have been deleted.`);
 
       const warnings: string[] = [];
       if (mode === "autonomous") {
-        warnings.push("⚠ AUTONOMOUS mode enabled — bot will execute trades without asking you.");
-        warnings.push("Make sure your risk settings (account balance, risk %) are correct.");
-        warnings.push("Use set_bot_mode with mode='off' to stop the bot at any time.");
+        warnings.push("⚠ AUTONOMOUS mode enabled — this bot will execute trades without asking you.");
+        warnings.push("Make sure risk settings and account assignment are correct in the Bot tab.");
+        warnings.push(`Use set_bot_mode with mode='off' and botId='${updated.id.slice(0, 8)}' to stop it at any time.`);
       }
 
       return text(
-        `Bot mode set to: ${mode.toUpperCase()}\n\n` +
+        `Bot "${updated.name}" mode set to: ${mode.toUpperCase()}\n\n` +
         `Settings:\n` +
-        `  Min score threshold : ${settings.minScore}\n` +
-        `  Max open positions  : ${settings.maxOpenPositions}\n` +
-        `  Daily loss limit    : ${settings.dailyLossLimitPct}%\n` +
-        `  Active pairs        : ${settings.pairs.length > 0 ? settings.pairs.join(", ") : "All 6 pairs"}\n\n` +
+        `  Min confidence score : ${updated.settings.minConfidenceScore ?? "—"}\n` +
+        `  Max open positions   : ${updated.settings.maxOpenPositions ?? "—"}\n` +
+        `  Account              : ${updated.accountId ?? "none assigned"}\n` +
+        `  Active pairs         : ${updated.pairs.length > 0 ? updated.pairs.join(", ") : "All 6 pairs"}\n\n` +
         (warnings.length > 0 ? warnings.join("\n") : "Bot is ready.")
       );
     }
@@ -468,15 +494,21 @@ export function registerTools(server: McpServer, env: Env): void {
   // ── 20. get_bot_status ────────────────────────────────────────────────────────
   server.tool(
     "get_bot_status",
-    "Get the current bot mode, pending signals awaiting approval, and recent bot activity.",
+    "Get your real configured bot(s) — mode, settings, and account — plus signals awaiting approval and recent activity. 'Pending signals' here means setups queued for your review (approval mode only); a bot set to autonomous skips that queue and tries to execute immediately, so it won't show anything here even while it has a live order sitting unfilled at the broker.",
     {},
     async () => {
-      const [settings, pending, recent] = await Promise.all([
-        getBotSettings(env.KV),
+      const [bots, pending, recent] = await Promise.all([
+        listBots(env.DB),
         getBotSignals(env.DB, { status: "pending", limit: 10 }),
         getBotSignals(env.DB, { limit: 5, source: "live" }),
       ]);
       const token = await env.KV.get("ctrader:access_token");
+
+      const botLines = bots.map(b =>
+        `  ${b.name} [${b.type}] — ${b.id}\n` +
+        `    Mode: ${b.mode.toUpperCase()} | Account: ${b.accountId ?? "none assigned"} | Pairs: ${b.pairs.length > 0 ? b.pairs.join(", ") : "all 6"}\n` +
+        `    Min confidence: ${b.settings.minConfidenceScore ?? "—"} | Max open positions: ${b.settings.maxOpenPositions ?? "—"}`
+      ).join("\n\n");
 
       const pendingLines = pending.map(s =>
         `  [${s.id.slice(0, 8)}] ${s.pair} ${s.direction.toUpperCase()} @ ${s.entryPrice} | Score: ${s.score.toFixed(0)} | Lots: ${s.lots}\n` +
@@ -490,10 +522,8 @@ export function registerTools(server: McpServer, env: Env): void {
 
       return text(
         `BOT STATUS\n${"─".repeat(40)}\n` +
-        `Mode         : ${settings.mode.toUpperCase()}\n` +
-        `cTrader      : ${token ? "Connected" : "Not connected"}\n` +
-        `Min score    : ${settings.minConfidenceScore}\n` +
-        `Max positions: ${settings.maxOpenPositions}\n\n` +
+        `cTrader: ${token ? "Connected" : "Not connected"}\n\n` +
+        `BOTS (${bots.length}):\n${botLines || "  No bots configured — create one in the Bot tab."}\n\n` +
         (pending.length > 0
           ? `PENDING SIGNALS (${pending.length}) — use approve_signal or reject_signal:\n${pendingLines}\n\n`
           : `No pending signals.\n\n`) +
@@ -581,29 +611,50 @@ export function registerTools(server: McpServer, env: Env): void {
   // ── 23. run_bot_scan ──────────────────────────────────────────────────────────
   server.tool(
     "run_bot_scan",
-    "Trigger an immediate bot scan across all pairs using the trendline strategy. In approval mode this queues any qualifying setups. In autonomous mode it executes them immediately. The bot only acts when a trendline break+retest is detected and the score threshold is met.",
+    "Trigger an immediate scan for every active (non-off) bot, using each bot's own real configured settings and account — the same as clicking 'Scan All' in the Bot tab. In approval mode this queues qualifying setups for review. In autonomous mode it executes them immediately for real, using real account balance and risk settings.",
     {},
     async () => {
-      const result = await runBotScan({
-        DB:                    env.DB,
-        KV:                    env.KV,
-        MARKET_DATA_PROVIDER:  env.MARKET_DATA_PROVIDER,
-        TWELVE_DATA_API_KEY:   (env as any).TWELVE_DATA_API_KEY,
-        CTRADER_CLIENT_ID:     env.CTRADER_CLIENT_ID,
-        CTRADER_CLIENT_SECRET: env.CTRADER_CLIENT_SECRET,
-        CTRADER_ACCOUNT_ID:    env.CTRADER_ACCOUNT_ID,
-      });
+      const bots = await listBots(env.DB);
+      const activeBots = bots.filter(b => b.mode !== "off");
+      if (activeBots.length === 0) {
+        return text(bots.length === 0
+          ? "No bots configured yet — create one in the Bot tab first."
+          : "All bots are set to OFF — nothing to scan. Use set_bot_mode to activate one.");
+      }
+
+      let totalFound = 0, totalQueued = 0, totalExecuted = 0, totalFailed = 0;
+      const perBotLines: string[] = [];
+
+      for (const bot of activeBots) {
+        try {
+          const result = await runBotScan({
+            DB:                    env.DB,
+            KV:                    env.KV,
+            MARKET_DATA_PROVIDER:  env.MARKET_DATA_PROVIDER,
+            TWELVE_DATA_API_KEY:   env.TWELVE_DATA_API_KEY,
+            CTRADER_CLIENT_ID:     env.CTRADER_CLIENT_ID,
+            CTRADER_CLIENT_SECRET: env.CTRADER_CLIENT_SECRET,
+            CTRADER_ACCOUNT_ID:    env.CTRADER_ACCOUNT_ID,
+            botInstance:           bot,
+          });
+          totalFound    += result.signalsFound;
+          totalQueued   += result.signalsQueued;
+          totalExecuted += result.signalsExecuted;
+          totalFailed   += result.signalsFailed;
+          perBotLines.push(
+            `  ${bot.name} [${bot.mode}]: ${result.pairsScanned} pairs scanned, ${result.signalsFound} found, ` +
+            `${result.signalsQueued} queued, ${result.signalsExecuted} executed, ${result.signalsFailed} failed` +
+            (result.errors.length > 0 ? `\n    ${result.errors.join("; ")}` : "")
+          );
+        } catch (e) {
+          perBotLines.push(`  ${bot.name}: ERROR — ${(e as Error).message}`);
+        }
+      }
 
       return text(
         `BOT SCAN COMPLETE\n${"─".repeat(30)}\n` +
-        `Pairs scanned  : ${result.pairsScanned}\n` +
-        `Signals found  : ${result.signalsFound}\n` +
-        `Queued (approval) : ${result.signalsQueued}\n` +
-        `Executed (auto)   : ${result.signalsExecuted}\n` +
-        `Failed         : ${result.signalsFailed}\n` +
-        (result.errors.length > 0
-          ? `\nNotes:\n${result.errors.map(e => `  • ${e}`).join("\n")}`
-          : "")
+        `Totals — found: ${totalFound} | queued: ${totalQueued} | executed: ${totalExecuted} | failed: ${totalFailed}\n\n` +
+        perBotLines.join("\n\n")
       );
     }
   );
