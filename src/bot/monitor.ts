@@ -111,17 +111,30 @@ export async function monitorPositions(env: Env): Promise<void> {
           await updateBotSignalStatus(env.DB, signal.id, "expired");
           await env.KV.delete(trailKey(signal.id));
         } else if (signal.expiresAt < Date.now() && !deals.some(d => d.positionId === posId)) {
-          // Past its own 4h validity window with zero deals (entry or close) ever recorded for
-          // this position — the limit order never filled and never will. Left alone, this signal
-          // would sit "expired" forever while its journal row keeps showing a fake "OPEN" trade
-          // that has no closing deal to ever resolve it. Clean it up rather than leave it stuck.
-          if (signal.journalId) {
-            await deleteJournalEntry(env.DB, signal.journalId);
-            await clearBotSignalJournalId(env.DB, signal.id);
+          // Past its own 4h validity window with zero deals ever recorded — but that alone
+          // doesn't prove the order is dead, only that it hasn't filled *yet*. We never
+          // actually cancel the order on the broker when our own expiry window passes, so it
+          // can keep sitting live on cTrader and fill hours later — marking it "expired" and
+          // deleting its journal entry at this point previously destroyed the record of a
+          // trade that went on to close for a real win/loss with nothing left to show it.
+          // Actually cancel the order first — only once the broker confirms there's nothing
+          // left to fill is it safe to stop tracking it.
+          let cancelled = false;
+          try {
+            await trading.cancelOrder(posId);
+            cancelled = true;
+          } catch (e) {
+            console.warn(`[Monitor] Could not cancel expired order ${posId} for ${signal.pair} (may have just filled) — leaving for next tick: ${(e as Error).message}`);
           }
-          console.log(`[Monitor] ${signal.pair} ${signal.direction} never filled — removed phantom journal entry`);
-          await updateBotSignalStatus(env.DB, signal.id, "expired");
-          await env.KV.delete(trailKey(signal.id));
+          if (cancelled) {
+            if (signal.journalId) {
+              await deleteJournalEntry(env.DB, signal.journalId);
+              await clearBotSignalJournalId(env.DB, signal.id);
+            }
+            console.log(`[Monitor] ${signal.pair} ${signal.direction} never filled — cancelled order and removed phantom journal entry`);
+            await updateBotSignalStatus(env.DB, signal.id, "expired");
+            await env.KV.delete(trailKey(signal.id));
+          }
         }
         // else: no position yet, but no closing deal either, and still within its expiry
         // window — this is just a limit order that hasn't filled yet. Leave status as
