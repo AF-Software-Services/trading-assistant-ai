@@ -324,7 +324,12 @@
         <div class="data-panel">
           <div class="data-panel-header">
             <span>Open Positions</span>
-            <button id="refresh-positions" class="small-btn">↻ Refresh</button>
+            <div class="header-controls">
+              <select id="positions-account-filter" class="small-select">
+                <option value="all">All Accounts</option>
+              </select>
+              <button id="refresh-positions" class="small-btn">↻ Refresh</button>
+            </div>
           </div>
           <div id="positions-loading" class="panel-status hidden">Loading…</div>
           <div id="positions-error" class="panel-status error hidden"></div>
