@@ -1123,6 +1123,53 @@ function renderPairBars(byPair: Record<string, PeriodStats>): string {
   </div>`
 }
 
+// ── Dashboard scope: Demo/Live + per-account drill-down ────────────────────────
+let dashboardAccountType: 'live' | 'demo' = 'live'
+let dashboardSelectedAccountId: string = 'all'
+
+function accountsOfDashboardType(): any[] {
+  return cachedAccounts.filter(a => a.type === dashboardAccountType)
+}
+
+function renderDashboardAccountTabs(): void {
+  const wrap = el('dash-account-tabs')
+  const accounts = accountsOfDashboardType()
+
+  if (accounts.length === 0) {
+    wrap.innerHTML = ''
+    return
+  }
+
+  const tabs = [{ id: 'all', name: `All ${dashboardAccountType === 'live' ? 'Live' : 'Demo'}` }, ...accounts]
+  wrap.innerHTML = tabs.map(a => `
+    <button class="dash-account-tab ${a.id === dashboardSelectedAccountId ? 'active' : ''}" data-acct-id="${a.id}">${a.name}</button>
+  `).join('')
+
+  wrap.querySelectorAll<HTMLButtonElement>('.dash-account-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      dashboardSelectedAccountId = btn.dataset.acctId!
+      wrap.querySelectorAll('.dash-account-tab').forEach(b => b.classList.remove('active'))
+      btn.classList.add('active')
+      loadDashboard()
+    })
+  })
+}
+
+function initDashboardTabs(): void {
+  document.querySelectorAll<HTMLButtonElement>('.dash-type-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const type = btn.dataset.type as 'live' | 'demo'
+      if (type === dashboardAccountType) return
+      dashboardAccountType = type
+      dashboardSelectedAccountId = 'all'
+      document.querySelectorAll('.dash-type-tab').forEach(b => b.classList.remove('active'))
+      btn.classList.add('active')
+      renderDashboardAccountTabs()
+      loadDashboard()
+    })
+  })
+}
+
 // Runs the same close-detection/outcome-recording pass as the hourly cron, on demand.
 // The cron can leave a just-closed trade unrecorded for up to an hour — call this before
 // reading Journal/Dashboard data so a trade that closed seconds ago still shows up now,
@@ -1142,18 +1189,35 @@ async function loadDashboard(): Promise<void> {
     // without this, the Dashboard's own "Refresh" button refreshed everything except the
     // account balance, which stayed frozen at whatever it was on initial page load.
     await Promise.all([triggerMonitor(), loadAccounts()])
+    renderDashboardAccountTabs()
 
-    // Reuse the same multi-account aggregation as the Positions tab so balances/positions
-    // reflect every connected account, not just the legacy single default account.
-    const targets = cachedAccounts.filter(a => a.hasToken)
-    const queries = targets.length ? targets : [{ id: '', name: 'Default', type: 'demo', balance: null, currency: 'GBP' }]
+    // Scope to the selected Demo/Live type, and to a single account if drilled down —
+    // "All" means every connected account of the selected type, not every account overall.
+    const typeAccounts = accountsOfDashboardType()
+    const queries = typeAccounts.filter(a =>
+      a.hasToken && (dashboardSelectedAccountId === 'all' || a.id === dashboardSelectedAccountId)
+    )
 
+    if (typeAccounts.length === 0) {
+      el('dashboard-loading').classList.add('hidden')
+      el('dashboard-empty').textContent = `No ${dashboardAccountType === 'live' ? 'Live' : 'Demo'} accounts added yet — add one in the Accounts tab.`
+      el('dashboard-empty').classList.remove('hidden')
+      return
+    }
+    if (queries.length === 0) {
+      el('dashboard-loading').classList.add('hidden')
+      el('dashboard-empty').textContent = `Selected account isn't connected yet — connect it in the Accounts tab.`
+      el('dashboard-empty').classList.remove('hidden')
+      return
+    }
+    el('dashboard-empty').classList.add('hidden')
+
+    const accountIdsParam = queries.map(a => a.id).join(',')
     const [summaryRes, ...positionResults] = await Promise.all([
-      fetch('/api/v1/dashboard/summary'),
+      fetch(`/api/v1/dashboard/summary?accountIds=${encodeURIComponent(accountIdsParam)}`),
       ...queries.map(async (a) => {
-        const qs = a.id ? `?accountId=${encodeURIComponent(a.id)}` : ''
         try {
-          const res  = await fetch(`/api/v1/ctrader/positions${qs}`)
+          const res  = await fetch(`/api/v1/ctrader/positions?accountId=${encodeURIComponent(a.id)}`)
           const data = await res.json() as { positions?: PositionRow[]; pendingOrders?: PendingOrderRow[] }
           return { account: a, positions: data.positions ?? [], pendingOrders: data.pendingOrders ?? [] }
         } catch {
@@ -1375,6 +1439,7 @@ function init(): void {
 
   initTabs()
   initMobileMore()
+  initDashboardTabs()
   initPairButtons()
   initTfButtons()
   initChartTypeButtons()
