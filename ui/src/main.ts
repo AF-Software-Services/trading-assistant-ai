@@ -1763,9 +1763,13 @@ function initDiscoverAccounts(): void {
 async function loadAccounts(): Promise<void> {
   const list = document.getElementById('accounts-list')!
   try {
-    const res      = await fetch('/api/v1/ctrader/accounts')
+    // Fetch every account (including deactivated ones) once — the Accounts management list
+    // below needs to show inactive accounts so they can be reactivated, while cachedAccounts
+    // (read by the Dashboard, Positions, Bot assignment, etc.) is filtered down to active
+    // ones only, so a deactivated account's data disappears everywhere else automatically.
+    const res      = await fetch('/api/v1/ctrader/accounts?includeInactive=true')
     const accounts = await res.json() as any[]
-    cachedAccounts = accounts
+    cachedAccounts = accounts.filter(a => a.isActive)
 
     if (!accounts.length) {
       list.innerHTML = '<div class="bot-no-signals">No accounts. Click + Add Account to connect cTrader.</div>'
@@ -1773,7 +1777,7 @@ async function loadAccounts(): Promise<void> {
       list.innerHTML = accounts.map(renderAccountRow).join('')
       attachAccountRowEvents()
     }
-    updateAccountSelector(accounts)
+    updateAccountSelector(cachedAccounts)
   } catch (e: any) {
     list.innerHTML = `<div class="bot-no-signals" style="color:var(--sell)">Error: ${e.message}</div>`
   }
@@ -1798,16 +1802,20 @@ function renderAccountRow(a: any): string {
   const connectBtn = connected
     ? `<button class="small-btn acct-disconnect-btn" data-acct-id="${a.id}">Disconnect</button>`
     : `<button class="small-btn primary-btn acct-connect-btn" data-acct-id="${a.id}">Connect</button>`
-  const deleteBtn = a.id === 'default' ? '' :
-    `<button class="small-btn danger acct-delete-btn" data-acct-id="${a.id}">Delete</button>`
+  // Deactivating (not deleting) keeps credentials and history intact — it just hides the
+  // account from the Dashboard, Positions, Bot assignment, etc. until switched back on.
+  const activeToggleBtn = a.isActive
+    ? `<button class="small-btn acct-deactivate-btn" data-acct-id="${a.id}">Deactivate</button>`
+    : `<button class="small-btn primary-btn acct-activate-btn" data-acct-id="${a.id}">Activate</button>`
   const refreshBtn = connected
     ? `<button class="small-btn acct-refresh-balance-btn" data-acct-id="${a.id}" title="Refresh balance">↻</button>`
     : ''
 
-  return `<div class="account-row" data-acct-id="${a.id}">
+  return `<div class="account-row ${a.isActive ? '' : 'account-row-inactive'}" data-acct-id="${a.id}">
     <div class="account-row-left">
       <span class="account-name">${a.name}</span>
       <span class="acct-type-badge ${typeCls}">${typeLabel}</span>
+      ${a.isActive ? '' : '<span class="acct-inactive-badge">INACTIVE</span>'}
       <span class="account-meta">#${a.ctraderAccountId} · ${a.currency}</span>
       <span class="account-balance">${formatBalance(a)}</span>
     </div>
@@ -1815,7 +1823,7 @@ function renderAccountRow(a: any): string {
       <span class="${statusCls}">${statusDot} ${statusLbl}</span>
       ${refreshBtn}
       ${connectBtn}
-      ${deleteBtn}
+      ${activeToggleBtn}
     </div>
   </div>`
 }
@@ -1835,10 +1843,19 @@ function attachAccountRowEvents(): void {
       await loadAccounts()
     })
   })
-  document.querySelectorAll<HTMLButtonElement>('.acct-delete-btn').forEach(btn => {
+  document.querySelectorAll<HTMLButtonElement>('.acct-deactivate-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
-      if (!confirm('Delete this account? This cannot be undone.')) return
-      await fetch(`/api/v1/ctrader/accounts/${btn.dataset.acctId}`, { method: 'DELETE' })
+      btn.textContent = '…'
+      btn.disabled = true
+      await fetch(`/api/v1/ctrader/accounts/${btn.dataset.acctId}/deactivate`, { method: 'POST' })
+      await loadAccounts()
+    })
+  })
+  document.querySelectorAll<HTMLButtonElement>('.acct-activate-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.textContent = '…'
+      btn.disabled = true
+      await fetch(`/api/v1/ctrader/accounts/${btn.dataset.acctId}/activate`, { method: 'POST' })
       await loadAccounts()
     })
   })

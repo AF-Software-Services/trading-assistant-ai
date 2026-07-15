@@ -8,13 +8,18 @@ export interface CTraderAccount {
   createdAt:         number;
   balance:           number | null;   // live balance from cTrader, cached
   balanceUpdatedAt:  number | null;
+  isActive:          boolean;   // inactive accounts are hidden everywhere except account management
 }
 
 // ── D1 helpers ────────────────────────────────────────────────────────────────
 
-export async function listAccounts(db: D1Database): Promise<CTraderAccount[]> {
+// Active-only by default so every account-scoped view (Dashboard, Positions, Bot account
+// assignment, etc.) automatically hides a deactivated account's data just by going through
+// this one function — only the Accounts management screen itself needs to see inactive ones.
+export async function listAccounts(db: D1Database, opts: { includeInactive?: boolean } = {}): Promise<CTraderAccount[]> {
+  const where = opts.includeInactive ? '' : 'WHERE is_active = 1';
   const { results } = await db.prepare(
-    `SELECT * FROM ctrader_accounts ORDER BY created_at ASC`
+    `SELECT * FROM ctrader_accounts ${where} ORDER BY created_at ASC`
   ).all<Record<string, unknown>>();
   return results.map(rowToAccount);
 }
@@ -28,14 +33,14 @@ export async function getAccount(db: D1Database, id: string): Promise<CTraderAcc
 
 export async function createAccount(
   db: D1Database,
-  account: Omit<CTraderAccount, 'createdAt' | 'balance' | 'balanceUpdatedAt'>,
+  account: Omit<CTraderAccount, 'createdAt' | 'balance' | 'balanceUpdatedAt' | 'isActive'>,
 ): Promise<CTraderAccount> {
   const now = Date.now();
   await db.prepare(
     `INSERT INTO ctrader_accounts (id, name, type, ctrader_account_id, currency, status, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).bind(account.id, account.name, account.type, account.ctraderAccountId, account.currency, account.status, now).run();
-  return { ...account, createdAt: now, balance: null, balanceUpdatedAt: null };
+  return { ...account, createdAt: now, balance: null, balanceUpdatedAt: null, isActive: true };
 }
 
 export async function updateAccountStatus(
@@ -44,6 +49,12 @@ export async function updateAccountStatus(
   status: CTraderAccount['status'],
 ): Promise<void> {
   await db.prepare(`UPDATE ctrader_accounts SET status = ? WHERE id = ?`).bind(status, id).run();
+}
+
+// Deactivating an account keeps its credentials and history intact (unlike delete) — it
+// just stops showing up anywhere data is scoped by account, until reactivated.
+export async function setAccountActive(db: D1Database, id: string, active: boolean): Promise<void> {
+  await db.prepare(`UPDATE ctrader_accounts SET is_active = ? WHERE id = ?`).bind(active ? 1 : 0, id).run();
 }
 
 // Best-known real account balance to use as a sizing default when nothing more
@@ -83,6 +94,7 @@ function rowToAccount(row: Record<string, unknown>): CTraderAccount {
     createdAt:        row['created_at']          as number,
     balance:          (row['balance']            as number | null) ?? null,
     balanceUpdatedAt: (row['balance_updated_at'] as number | null) ?? null,
+    isActive:         (row['is_active'] as number | null) !== 0,
   };
 }
 
