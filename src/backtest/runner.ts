@@ -3,6 +3,7 @@ import { calculateATR } from "../engines/trend.ts";
 import { calcLots } from "../bot/engine.ts";
 import type { BotSignal } from "../bot/engine.ts";
 import { detectTrendlineSignal } from "../engines/trendline.ts";
+import type { TrendlineTunables } from "../engines/trendline.ts";
 
 // Approximate GBP pip value per standard lot
 const PIP_VALUE_GBP: Record<string, number> = {
@@ -29,6 +30,8 @@ export interface BacktestConfig {
   minScore: number;
   maxOpenPositions:    number;
   allowDuplicatePairs: boolean;
+  swingLookback:       number;
+  tunables:             Partial<TrendlineTunables>;
 }
 
 interface TwelveDataCandle {
@@ -287,10 +290,10 @@ export async function runTrendlineBacktest(
         continue;
       }
 
-      const sig = detectTrendlineSignal(history, config.rewardRisk, 5, dHistory);
+      const sig = detectTrendlineSignal(history, config.rewardRisk, config.swingLookback, dHistory, config.tunables);
       if (!sig) {
         // Secondary pass without daily bias — distinguishes "no pattern" from "bias filtered"
-        const sigNoBias = detectTrendlineSignal(history, config.rewardRisk, 5, undefined);
+        const sigNoBias = detectTrendlineSignal(history, config.rewardRisk, config.swingLookback, undefined, config.tunables);
         if (sigNoBias) {
           rejections["daily_bias_filter"] = (rejections["daily_bias_filter"] ?? 0) + 1;
         } else {

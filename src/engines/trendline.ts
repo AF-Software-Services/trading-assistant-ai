@@ -40,6 +40,42 @@ export interface TrendlineSignal {
   safetyAtEntry: number;
 }
 
+// Every numeric threshold in the detection/entry logic below used to be a bare literal.
+// Pulling them out lets each bot instance tune its own setup criteria (and backtest the
+// result) without touching code — see bot-types.ts BOT_TYPE_REGISTRY for the defaults,
+// which match the values these constants held before this became configurable.
+export interface TrendlineTunables {
+  slBufferAtr:       number; // SL distance beyond the flipped line, in ATR multiples
+  breakThresholdAtr: number; // how far price must close past a line to count as "broken"
+  retestWindowBars:  number; // bars allowed for the retest after a break
+  retestRecencyBars: number; // how stale a retest can be and still count
+  touchToleranceAtr: number; // how close price must come to a line to count as a touch
+  minStopDistAtr:    number; // minimum allowed stop distance (rejects too-tight setups)
+  minTouches:        number; // minimum touches a line needs to be considered
+}
+
+export const DEFAULT_TRENDLINE_TUNABLES: TrendlineTunables = {
+  slBufferAtr:       0.1,
+  breakThresholdAtr: 0.5,
+  retestWindowBars:  6,
+  retestRecencyBars: 3,
+  touchToleranceAtr: 0.3,
+  minStopDistAtr:    0.2,
+  minTouches:        2,
+};
+
+// Reads tunables off a bot's settings blob (values may be missing or wrong-typed if the bot
+// predates a given field, or settings_json was hand-edited) — only copies over fields that are
+// actually numbers, leaving the rest to DEFAULT_TRENDLINE_TUNABLES inside detectTrendlineSignal.
+export function pickTrendlineTunables(settings: Record<string, unknown>): Partial<TrendlineTunables> {
+  const picked: Partial<TrendlineTunables> = {};
+  for (const key of Object.keys(DEFAULT_TRENDLINE_TUNABLES) as (keyof TrendlineTunables)[]) {
+    const value = settings[key];
+    if (typeof value === "number") picked[key] = value;
+  }
+  return picked;
+}
+
 // ── Swing points ──────────────────────────────────────────────────────────────
 
 function swingHighs(candles: Candle[], lookback = 5): number[] {
@@ -151,10 +187,11 @@ export function getDailyBias(dailyCandles: Candle[]): "bullish" | "bearish" | "n
 // ── Build trendlines ──────────────────────────────────────────────────────────
 
 function buildLines(
-  candles: Candle[],
-  swings:  number[],
-  type:    "resistance" | "support",
-  atr:     number,
+  candles:   Candle[],
+  swings:    number[],
+  type:      "resistance" | "support",
+  atr:       number,
+  tunables:  TrendlineTunables,
 ): DetectedLine[] {
   if (swings.length < 2) return [];
   const result: DetectedLine[] = [];
@@ -203,8 +240,9 @@ function buildLines(
       for (let k = anchorIdx + 1; k < endIdx; k++) {
         const proj  = priceA + slope * (k - anchorIdx);
         const price = type === "resistance" ? candles[k]!.high : candles[k]!.low;
-        if (Math.abs(price - proj) <= atr * 0.3) touches++;
+        if (Math.abs(price - proj) <= atr * tunables.touchToleranceAtr) touches++;
       }
+      if (touches < tunables.minTouches) continue;
 
       result.push({
         type, p1Index: anchorIdx, p2Index: endIdx,
@@ -231,6 +269,7 @@ function detectSetupForLine(
   atr:       number,
   rrRatio:   number,
   dailyBias: "bullish" | "bearish" | "neutral",
+  tunables:  TrendlineTunables,
 ): TrendlineSignal | null {
   // Direction follows line type: resistance break → long, support break → short
   const breakDir: "buy" | "sell" = line.type === "resistance" ? "buy" : "sell";
@@ -240,7 +279,7 @@ function detectSetupForLine(
   if (dailyBias === "bearish" && breakDir === "buy")  return null;
 
   const total          = candles.length;
-  const breakThreshold = atr * 0.5;
+  const breakThreshold = atr * tunables.breakThresholdAtr;
 
   // ── Phase 1: find the initial break close ────────────────────────────────────
   const scanFrom = Math.max(line.p2Index + 1, total - 30);
@@ -255,9 +294,9 @@ function detectSetupForLine(
   if (breakIdx === -1) return null;
 
   // ── Phase 2: retest of the broken trendline ───────────────────────────────────
-  // Price must return to the broken line within 5 bars and close back on the break
-  // side — confirming the line has flipped from resistance to support (or vice versa).
-  const retestWindow = Math.min(breakIdx + 6, total);
+  // Price must return to the broken line within retestWindowBars and close back on the
+  // break side — confirming the line has flipped from resistance to support (or vice versa).
+  const retestWindow = Math.min(breakIdx + tunables.retestWindowBars, total);
   let retestIdx = -1;
 
   for (let i = breakIdx + 1; i < retestWindow; i++) {
@@ -265,12 +304,12 @@ function detectSetupForLine(
     const proj = projectPrice(line, i);
 
     if (breakDir === "buy") {
-      const touchedLine = c.low  <= proj + atr * 0.5;
+      const touchedLine = c.low  <= proj + breakThreshold;
       const heldAbove   = c.close > proj;
       if (touchedLine && heldAbove) { retestIdx = i; break; }
       if (c.close < proj - breakThreshold) break; // break failed — abort
     } else {
-      const touchedLine = c.high >= proj - atr * 0.5;
+      const touchedLine = c.high >= proj - breakThreshold;
       const heldBelow   = c.close < proj;
       if (touchedLine && heldBelow) { retestIdx = i; break; }
       if (c.close > proj + breakThreshold) break;
@@ -278,12 +317,12 @@ function detectSetupForLine(
   }
 
   if (retestIdx === -1) return null;
-  if (retestIdx < total - 3) return null; // stale — retest not recent enough
+  if (retestIdx < total - tunables.retestRecencyBars) return null; // stale — retest not recent enough
 
   // ── Trade levels ─────────────────────────────────────────────────────────────
   const retestCandle  = candles[retestIdx]!;
   const lineAtRetest  = projectPrice(line, retestIdx);
-  const stopBuffer    = atr * 0.1;
+  const stopBuffer    = atr * tunables.slBufferAtr;
 
   const entryPrice = retestCandle.close;
   const stopLoss   = breakDir === "buy"
@@ -291,7 +330,7 @@ function detectSetupForLine(
     : lineAtRetest + stopBuffer;  // SL just above flipped resistance
 
   const stopDist = Math.abs(entryPrice - stopLoss);
-  if (stopDist < atr * 0.2) return null;
+  if (stopDist < atr * tunables.minStopDistAtr) return null;
 
   const takeProfit = breakDir === "buy"
     ? entryPrice + stopDist * rrRatio
@@ -340,8 +379,11 @@ export function detectTrendlineSignal(
   rrRatio       = 1.5,
   lookback      = 5,
   dailyCandles?: Candle[],
+  tunables:     Partial<TrendlineTunables> = {},
 ): TrendlineSignal | null {
   if (candles.length < 50) return null;
+
+  const t = { ...DEFAULT_TRENDLINE_TUNABLES, ...tunables };
 
   const atr = calculateATR(candles);
   if (atr <= 0) return null;
@@ -353,18 +395,18 @@ export function detectTrendlineSignal(
 
   // Longs: scan all descending resistance lines for a break+retest
   // Shorts: scan all ascending support lines for a break+retest
-  const resistanceLines = buildLines(candles, highs, "resistance", atr);
-  const supportLines    = buildLines(candles, lows,  "support",    atr);
+  const resistanceLines = buildLines(candles, highs, "resistance", atr, t);
+  const supportLines    = buildLines(candles, lows,  "support",    atr, t);
 
   const signals: TrendlineSignal[] = [];
 
   for (const line of resistanceLines) {
-    const sig = detectSetupForLine(candles, line, atr, rrRatio, dailyBias);
+    const sig = detectSetupForLine(candles, line, atr, rrRatio, dailyBias, t);
     if (sig) signals.push(sig);
   }
 
   for (const line of supportLines) {
-    const sig = detectSetupForLine(candles, line, atr, rrRatio, dailyBias);
+    const sig = detectSetupForLine(candles, line, atr, rrRatio, dailyBias, t);
     if (sig) signals.push(sig);
   }
 
