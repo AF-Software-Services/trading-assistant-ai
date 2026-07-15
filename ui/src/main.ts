@@ -1138,7 +1138,10 @@ async function loadDashboard(): Promise<void> {
   el('dashboard-content').classList.add('hidden')
 
   try {
-    await triggerMonitor()
+    // cachedAccounts (and the balance figure on it) is only ever written by loadAccounts() —
+    // without this, the Dashboard's own "Refresh" button refreshed everything except the
+    // account balance, which stayed frozen at whatever it was on initial page load.
+    await Promise.all([triggerMonitor(), loadAccounts()])
 
     // Reuse the same multi-account aggregation as the Positions tab so balances/positions
     // reflect every connected account, not just the legacy single default account.
