@@ -1631,6 +1631,17 @@ html, body {
   flex-wrap: wrap;
 }
 .account-row:last-child { border-bottom: none; }
+.account-row-inactive { opacity: 0.55; }
+.acct-inactive-badge {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+  background: rgba(139,148,158,0.15);
+  color: var(--muted);
+}
 .account-row-left {
   display: flex;
   align-items: center;
