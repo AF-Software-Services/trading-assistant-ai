@@ -28,6 +28,8 @@ const PT = {
   DEAL_LIST_REQ:            2133,
   DEAL_LIST_RES:            2134,
   ERROR_RES:                2142,
+  GET_ACCOUNTS_BY_TOKEN_REQ: 2149,
+  GET_ACCOUNTS_BY_TOKEN_RES: 2150,
 } as const;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -711,6 +713,61 @@ export async function diagnoseCTrader(cfg: CTraderConfig): Promise<{ steps: stri
     conn.close();
   }
   return { steps };
+}
+
+// Field layout confirmed empirically against a real token (see rawDump) rather than
+// guessed — ProtoOACtidTraderAccount fields 4/5 are timestamps we don't currently need.
+const CTID_TRADER_ACCOUNT_SCHEMA: MessageSchema = {
+  ctidTraderAccountId: { no: 1, type: { t: 'varint' } },
+  isLive:               { no: 2, type: { t: 'varint' } },
+  traderLogin:          { no: 3, type: { t: 'varint' } },
+  brokerName:           { no: 6, type: { t: 'string' } },
+};
+const GET_ACCOUNTS_BY_TOKEN_REQ_SCHEMA: MessageSchema = {
+  accessToken: { no: 2, type: { t: 'string' } },
+};
+const GET_ACCOUNTS_BY_TOKEN_RES_SCHEMA: MessageSchema = {
+  account: { no: 4, type: { t: 'message', schema: CTID_TRADER_ACCOUNT_SCHEMA }, repeated: true },
+};
+
+export interface DiscoveredAccount {
+  ctidTraderAccountId: number;
+  isLive:               boolean;
+  traderLogin:           number;
+  brokerName:            string;
+}
+
+// Lists every cTrader account reachable with a given access token — NOT just the one
+// account originally used to authorize it. Confirmed empirically: a single OAuth token
+// covers every account under the same cTrader ID, and the broker's own "Login" number
+// (shown when creating an account) is a different value from the ctidTraderAccountId the
+// Open API actually needs — entering the Login where an account ID was expected is what
+// caused a "cTID trader account not found" error on a newly-connected account. This lets
+// the app discover the real, correct ID directly instead of asking the user to hunt for
+// it or guess between two similar-looking numbers.
+export async function getAccountsByToken(
+  cfg: { clientId: string; clientSecret: string; accessToken: string },
+): Promise<DiscoveredAccount[]> {
+  const conn = new TcpConnection();
+  try {
+    // Account-agnostic — no account is selected yet, so either host works; which host you
+    // connect to doesn't filter which accounts (demo or live) come back.
+    await conn.open(DEMO_HOST, API_PORT);
+    await conn.send(PT.APP_AUTH_REQ, APP_AUTH_REQ_SCHEMA, { clientId: cfg.clientId, clientSecret: cfg.clientSecret });
+    await conn.waitFor(PT.APP_AUTH_RES, {}, 8000);
+
+    await conn.send(PT.GET_ACCOUNTS_BY_TOKEN_REQ, GET_ACCOUNTS_BY_TOKEN_REQ_SCHEMA, { accessToken: cfg.accessToken });
+    const res = await conn.waitFor(PT.GET_ACCOUNTS_BY_TOKEN_RES, GET_ACCOUNTS_BY_TOKEN_RES_SCHEMA, 8000);
+    const accounts = (res['account'] ?? []) as Record<string, unknown>[];
+    return accounts.map(a => ({
+      ctidTraderAccountId: a['ctidTraderAccountId'] as number,
+      isLive:               !!(a['isLive'] as number),
+      traderLogin:           a['traderLogin'] as number,
+      brokerName:            (a['brokerName'] as string) ?? '',
+    }));
+  } finally {
+    conn.close();
+  }
 }
 
 // ── CTraderClient ──────────────────────────────────────────────────────────────

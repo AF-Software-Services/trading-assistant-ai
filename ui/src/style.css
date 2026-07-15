@@ -1683,6 +1683,19 @@ html, body {
 .acct-status-connected { font-size: 10px; color: var(--buy);   white-space: nowrap; }
 .acct-status-pending   { font-size: 10px; color: var(--muted); white-space: nowrap; }
 
+.discover-account-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text);
+}
+.discover-account-row:last-child { border-bottom: none; }
+.discover-account-row > span:nth-child(2) { flex: 1; }
+.discover-account-added { font-size: 11px; color: var(--buy); white-space: nowrap; }
+
 .bot-card-mode {
   font-size: 9px;
   font-weight: 700;
