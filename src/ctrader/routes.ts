@@ -86,6 +86,12 @@ export function createCTraderRouter() {
   // GET /auth/ctrader?accountId=<id>
   app.get('/auth/ctrader', async (c) => {
     const accountId = c.req.query('accountId') ?? 'default';
+    // cTrader's OAuth server doesn't reliably echo the `state` param back on the callback
+    // (confirmed live: connecting a second account silently reconnected "default" instead,
+    // because callback's `state` came back empty and fell through to the 'default' guess).
+    // Don't depend on it — stash which account this flow is for in KV and read it back in
+    // the callback, falling back to `state` only if present for extra safety.
+    await c.env.KV.put('oauth:pending_account', accountId, { expirationTtl: 600 });
     const url = new URL(AUTH_URL);
     url.searchParams.set('client_id',     c.env.CTRADER_CLIENT_ID);
     url.searchParams.set('redirect_uri',  REDIRECT_URI);
@@ -97,9 +103,16 @@ export function createCTraderRouter() {
 
   // ── OAuth: callback ──────────────────────────────────────────────────────────
   app.get('/auth/callback', async (c) => {
-    const code      = c.req.query('code');
-    const accountId = c.req.query('state') ?? 'default';
+    const code = c.req.query('code');
     if (!code) return c.json({ error: 'No code' }, 400);
+
+    // KV is the reliable source (see comment on the initiate route) — `state` is only a
+    // fallback in case the KV entry expired or this callback fires from an older in-flight
+    // flow that predates this fix.
+    const pendingAccountId = await c.env.KV.get('oauth:pending_account');
+    const stateAccountId   = c.req.query('state');
+    const accountId        = pendingAccountId || stateAccountId || 'default';
+    await c.env.KV.delete('oauth:pending_account');
 
     const res = await fetch(TOKEN_URL, {
       method: 'POST',
