@@ -1211,6 +1211,52 @@ html, body {
   margin: 0;
 }
 
+.dash-type-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.dash-type-tab {
+  padding: 8px 18px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.dash-type-tab:hover { color: var(--text); }
+.dash-type-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.dash-account-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.dash-account-tab {
+  padding: 5px 12px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.dash-account-tab:hover { color: var(--text); border-color: var(--accent); }
+.dash-account-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
 .dash-summary-row {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

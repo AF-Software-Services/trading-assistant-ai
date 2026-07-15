@@ -222,8 +222,16 @@
             <button id="refresh-dashboard" class="small-btn">↻ Refresh</button>
           </div>
 
+          <!-- Demo/Live scope + per-account drill-down -->
+          <div class="dash-type-tabs">
+            <button class="dash-type-tab active" data-type="live">Live</button>
+            <button class="dash-type-tab" data-type="demo">Demo</button>
+          </div>
+          <div id="dash-account-tabs" class="dash-account-tabs"></div>
+
           <div id="dashboard-loading" class="hidden">Loading…</div>
           <div id="dashboard-error" class="hidden" style="color:var(--sell)"></div>
+          <div id="dashboard-empty" class="hidden bot-no-signals"></div>
 
           <div id="dashboard-content" class="hidden">
             <!-- Top summary: balance, open positions, win rate ring, streak -->

@@ -60,16 +60,35 @@ export function createDashboardRouter() {
     const startOfMonth = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
     const startOfYear  = Date.UTC(now.getUTCFullYear(), 0, 1);
 
+    // Multi-account scoping: a signal's own row has no account_id — it's only knowable via
+    // the bot that generated it, which is itself assigned to one account. When the caller
+    // asks to scope by account (the Dashboard's Demo/Live split and per-account drill-down),
+    // join through bots and only count signals whose bot has an account in the requested set.
+    // Signals from an unassigned/unattributed bot are excluded once scoping is requested —
+    // there's no way to say which account they belong to.
+    const accountIdsParam = c.req.query("accountIds");
+    const accountIds = accountIdsParam ? accountIdsParam.split(",").filter(Boolean) : null;
+
     // Note: monitor.ts flips status to "expired" for every closed position once it records
     // an outcome (win, loss, or genuinely expired) — status is a lifecycle marker, not a
     // result. Filtering on status='executed' here would exclude every real closed trade
     // except ones from before that behaviour existed, so we filter on outcome instead.
-    const { results } = await c.env.DB.prepare(
-      `SELECT pair, outcome, close_time, pnl_pips, pnl_gbp
-       FROM bot_signals
-       WHERE source = 'live' AND outcome IS NOT NULL AND close_time IS NOT NULL
-       ORDER BY close_time DESC`
-    ).all<ClosedSignalRow>();
+    const query = accountIds && accountIds.length > 0
+      ? c.env.DB.prepare(
+          `SELECT bs.pair, bs.outcome, bs.close_time, bs.pnl_pips, bs.pnl_gbp
+           FROM bot_signals bs
+           JOIN bots b ON bs.bot_id = b.id
+           WHERE bs.source = 'live' AND bs.outcome IS NOT NULL AND bs.close_time IS NOT NULL
+             AND b.account_id IN (${accountIds.map(() => "?").join(",")})
+           ORDER BY bs.close_time DESC`
+        ).bind(...accountIds)
+      : c.env.DB.prepare(
+          `SELECT pair, outcome, close_time, pnl_pips, pnl_gbp
+           FROM bot_signals
+           WHERE source = 'live' AND outcome IS NOT NULL AND close_time IS NOT NULL
+           ORDER BY close_time DESC`
+        );
+    const { results } = await query.all<ClosedSignalRow>();
 
     const today = emptyStats();
     const week  = emptyStats();
