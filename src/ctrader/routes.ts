@@ -242,7 +242,13 @@ export function createCTraderRouter() {
     // hidden, not disconnected) and should still count as "already added" so it isn't
     // offered again and duplicated.
     const accounts        = await listAccounts(c.env.DB, { includeInactive: true });
-    const connected       = accounts.find(a => a.status === 'connected');
+    // Different connected accounts can carry different OAuth grants (e.g. a token authorized
+    // only against demo accounts can't see live ones on the same cTrader ID) — allow searching
+    // from a specific account's token instead of always defaulting to the first connected one.
+    const requestedId     = c.req.query('tokenAccountId');
+    const connected       = requestedId
+      ? accounts.find(a => a.id === requestedId && a.status === 'connected')
+      : accounts.find(a => a.status === 'connected');
     const legacyToken     = await c.env.KV.get('ctrader:access_token');
     const token           = connected ? await c.env.KV.get(tokenKey(connected.id)) : legacyToken;
     const tokenAccountId  = connected?.id ?? (legacyToken ? 'default' : null);
