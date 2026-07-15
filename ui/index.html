@@ -508,6 +508,9 @@
           <div class="data-panel-header">
             <span>Trade History</span>
             <div class="header-controls">
+              <select id="history-account-filter" class="small-select">
+                <option value="all">All Accounts</option>
+              </select>
               <select id="history-days" class="small-select">
                 <option value="7">Last 7 days</option>
                 <option value="30" selected>Last 30 days</option>
@@ -523,6 +526,7 @@
             <table id="history-table" class="data-table hidden">
               <thead>
                 <tr>
+                  <th>Account</th>
                   <th>Pair</th>
                   <th>Dir</th>
                   <th>Lots</th>

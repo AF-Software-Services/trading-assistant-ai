@@ -921,11 +921,13 @@ function renderPendingOrdersTable(rows: Array<PendingOrderRow & { account: { nam
 }
 
 let positionsAccountFilter: string = 'all'
+let historyAccountFilter: string = 'all'
 
-// Populates the Live/Demo grouped account filter dropdown from cachedAccounts, preserving
+// Populates a Live/Demo grouped account filter dropdown from cachedAccounts, preserving
 // the current selection if it's still a valid option (e.g. after a background refresh).
-function renderPositionsAccountFilter(): void {
-  const select = el<HTMLSelectElement>('positions-account-filter')
+// Shared by Positions and History so both filters behave identically.
+function renderAccountFilter(selectId: string, current: string): string {
+  const select = el<HTMLSelectElement>(selectId)
   const live = cachedAccounts.filter(a => a.type === 'live')
   const demo = cachedAccounts.filter(a => a.type === 'demo')
 
@@ -936,9 +938,10 @@ function renderPositionsAccountFilter(): void {
   `
   select.innerHTML = `<option value="all">All Accounts</option>${optgroup('Live', live)}${optgroup('Demo', demo)}`
 
-  const stillValid = positionsAccountFilter === 'all' || cachedAccounts.some(a => a.id === positionsAccountFilter)
-  if (!stillValid) positionsAccountFilter = 'all'
-  select.value = positionsAccountFilter
+  const stillValid = current === 'all' || cachedAccounts.some(a => a.id === current)
+  const value = stillValid ? current : 'all'
+  select.value = value
+  return value
 }
 
 async function loadPositions(): Promise<void> {
@@ -948,7 +951,7 @@ async function loadPositions(): Promise<void> {
   el('positions-table').classList.add('hidden')
 
   try {
-    renderPositionsAccountFilter()
+    positionsAccountFilter = renderAccountFilter('positions-account-filter', positionsAccountFilter)
 
     // Pull positions from every connected account so multi-account setups show everything at
     // once, unless the user has scoped down to "All", a type, or one specific account.
@@ -1382,27 +1385,53 @@ async function loadHistory(): Promise<void> {
   el('history-table').classList.add('hidden')
 
   try {
-    const res  = await fetch(`/api/v1/ctrader/history?days=${days}`)
-    const data = await res.json() as { trades?: TradeRow[]; error?: string }
-    if (data.error) throw new Error(data.error)
+    historyAccountFilter = renderAccountFilter('history-account-filter', historyAccountFilter)
 
-    const trades = data.trades ?? []
-    if (trades.length === 0) {
+    // Same multi-account fan-out as loadPositions(): pull every connected account's history
+    // unless the user has scoped down to "All" or one specific account.
+    const targets = cachedAccounts.filter(a =>
+      a.hasToken && (historyAccountFilter === 'all' || a.id === historyAccountFilter)
+    )
+    const queries = targets.length ? targets : [{ id: '', name: 'Default', type: 'demo' }]
+
+    const results = await Promise.all(queries.map(async (a) => {
+      const qs = a.id ? `&accountId=${encodeURIComponent(a.id)}` : ''
+      try {
+        const res  = await fetch(`/api/v1/ctrader/history?days=${days}${qs}`)
+        const data = await res.json() as { trades?: TradeRow[]; error?: string }
+        if (data.error) return { account: a, trades: [] as TradeRow[], error: data.error }
+        return { account: a, trades: data.trades ?? [], error: null as string | null }
+      } catch (e) {
+        return { account: a, trades: [] as TradeRow[], error: (e as Error).message }
+      }
+    }))
+
+    const rows = results.flatMap(r => r.trades.map(t => ({ ...t, account: r.account })))
+    const errors = results.filter(r => r.error).map(r => `${r.account.name}: ${r.error}`)
+
+    if (rows.length === 0) {
       el('history-empty').classList.remove('hidden')
+      if (errors.length) {
+        el<HTMLElement>('history-error').textContent = errors.join(' · ')
+        el('history-error').classList.remove('hidden')
+      }
       return
     }
 
     const tbody = el<HTMLTableSectionElement>('history-body')
-    tbody.innerHTML = trades.map(t => {
-      const lots   = t.lots.toFixed(2)
-      const dec    = t.symbol.includes('JPY') ? 3 : 5
-      const dir    = t.direction === 'buy' ? 'buy' : 'sell'
+    tbody.innerHTML = rows.map(t => {
+      const lots     = t.lots.toFixed(2)
+      const dec      = t.symbol.includes('JPY') ? 3 : 5
+      const dir      = t.direction === 'buy' ? 'buy' : 'sell'
       // One row per trade (entry + exit merged) — "Open" here always means genuinely still
       // open, not "this is just the entry-side deal of an already-closed trade".
-      const date   = safeDateTime(t.closeTime ?? t.openTime)
-      const pnl    = t.profit != null ? t.profit.toFixed(2) : null
-      const pnlCls = pnl && parseFloat(pnl) >= 0 ? 'profit-positive' : 'profit-negative'
+      const date     = safeDateTime(t.closeTime ?? t.openTime)
+      const pnl      = t.profit != null ? t.profit.toFixed(2) : null
+      const pnlCls   = pnl && parseFloat(pnl) >= 0 ? 'profit-positive' : 'profit-negative'
+      const typeCls  = t.account.type === 'live' ? 'acct-badge-live' : 'acct-badge-demo'
+      const acctCell = `<span class="acct-type-badge ${typeCls}">${t.account.type.toUpperCase()}</span> ${t.account.name}`
       return `<tr>
+        <td data-label="Account">${acctCell}</td>
         <td data-label="Pair">${t.symbol}</td>
         <td data-label="Dir" class="${dir}">${dir.toUpperCase()}</td>
         <td data-label="Lots">${lots}</td>
@@ -1413,6 +1442,10 @@ async function loadHistory(): Promise<void> {
       </tr>`
     }).join('')
 
+    if (errors.length) {
+      el<HTMLElement>('history-error').textContent = errors.join(' · ')
+      el('history-error').classList.remove('hidden')
+    }
     el('history-table').classList.remove('hidden')
   } catch (e) {
     el<HTMLElement>('history-error').textContent = (e as Error).message
@@ -1489,6 +1522,10 @@ function init(): void {
   document.getElementById('refresh-dashboard')?.addEventListener('click', loadDashboard)
   document.getElementById('refresh-history')?.addEventListener('click', loadHistory)
   document.getElementById('history-days')?.addEventListener('change', loadHistory)
+  document.getElementById('history-account-filter')?.addEventListener('change', (e) => {
+    historyAccountFilter = (e.target as HTMLSelectElement).value
+    loadHistory()
+  })
   initJournal()
   initAccounts()
   initBot()
