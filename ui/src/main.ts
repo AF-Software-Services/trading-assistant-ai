@@ -2126,7 +2126,67 @@ function initBot(): void {
             value="${bot.settings.minTouches ?? 2}"
             data-bot-id="${bot.id}" data-key="minTouches" />
         </div>
-      </div>${riskFields}` : ''
+      </div>${riskFields}
+      <details class="bot-card-advanced">
+        <summary>Advanced — setup tuning</summary>
+        <div class="bot-card-row">
+          <span class="bot-card-label">SL Buffer</span>
+          <div class="bot-card-setting">
+            <input type="number" min="0" max="2" step="0.05"
+              value="${bot.settings.slBufferAtr ?? 0.1}"
+              data-bot-id="${bot.id}" data-key="slBufferAtr" />
+            <span style="font-size:10px;color:var(--muted)">×ATR beyond line</span>
+          </div>
+          <span class="bot-card-label" style="margin-left:12px">Break Threshold</span>
+          <div class="bot-card-setting">
+            <input type="number" min="0.1" max="2" step="0.05"
+              value="${bot.settings.breakThresholdAtr ?? 0.5}"
+              data-bot-id="${bot.id}" data-key="breakThresholdAtr" />
+            <span style="font-size:10px;color:var(--muted)">×ATR</span>
+          </div>
+        </div>
+        <div class="bot-card-row">
+          <span class="bot-card-label">Retest Window</span>
+          <div class="bot-card-setting">
+            <input type="number" min="2" max="20" step="1"
+              value="${bot.settings.retestWindowBars ?? 6}"
+              data-bot-id="${bot.id}" data-key="retestWindowBars" />
+            <span style="font-size:10px;color:var(--muted)">bars</span>
+          </div>
+          <span class="bot-card-label" style="margin-left:12px">Retest Recency</span>
+          <div class="bot-card-setting">
+            <input type="number" min="1" max="20" step="1"
+              value="${bot.settings.retestRecencyBars ?? 3}"
+              data-bot-id="${bot.id}" data-key="retestRecencyBars" />
+            <span style="font-size:10px;color:var(--muted)">bars</span>
+          </div>
+        </div>
+        <div class="bot-card-row">
+          <span class="bot-card-label">Touch Tolerance</span>
+          <div class="bot-card-setting">
+            <input type="number" min="0.05" max="1" step="0.05"
+              value="${bot.settings.touchToleranceAtr ?? 0.3}"
+              data-bot-id="${bot.id}" data-key="touchToleranceAtr" />
+            <span style="font-size:10px;color:var(--muted)">×ATR</span>
+          </div>
+          <span class="bot-card-label" style="margin-left:12px">Min Stop Dist</span>
+          <div class="bot-card-setting">
+            <input type="number" min="0" max="1" step="0.05"
+              value="${bot.settings.minStopDistAtr ?? 0.2}"
+              data-bot-id="${bot.id}" data-key="minStopDistAtr" />
+            <span style="font-size:10px;color:var(--muted)">×ATR</span>
+          </div>
+        </div>
+        <div class="bot-card-row">
+          <span class="bot-card-label">Swing Lookback</span>
+          <div class="bot-card-setting">
+            <input type="number" min="2" max="20" step="1"
+              value="${bot.settings.swingLookback ?? 5}"
+              data-bot-id="${bot.id}" data-key="swingLookback" />
+            <span style="font-size:10px;color:var(--muted)">bars each side</span>
+          </div>
+        </div>
+      </details>` : ''
 
     const acct       = cachedAccounts.find(a => a.id === bot.accountId)
     const acctBadge  = acct

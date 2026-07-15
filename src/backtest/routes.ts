@@ -5,6 +5,7 @@ import type { BacktestConfig, BacktestResult } from "./runner.ts";
 import { saveBotSignal } from "../bot/engine.ts";
 import { getBot } from "../bot/bot-types.ts";
 import { getAccount, getPrimaryAccountBalance } from "../ctrader/account-types.ts";
+import { pickTrendlineTunables } from "../engines/trendline.ts";
 
 
 export function createBacktestRouter() {
@@ -38,6 +39,10 @@ export function createBacktestRouter() {
     const minScore           = botInstance.settings["minConfidenceScore"] as number;
     const maxOpenPositions   = botInstance.settings["maxOpenPositions"]   as number;
     const allowDuplicatePairs = botInstance.settings["allowDuplicatePairs"] as boolean;
+    const swingLookback      = (botInstance.settings["swingLookback"] as number | undefined) ?? 5;
+    // Trade-setup tuning — undefined fields fall back to DEFAULT_TRENDLINE_TUNABLES inside
+    // detectTrendlineSignal, same as the live bot path in bot/engine.ts.
+    const tunables = pickTrendlineTunables(botInstance.settings);
     const pairs          = body.pairs;
     const { fromMs, toMs } = body;
 
@@ -51,7 +56,7 @@ export function createBacktestRouter() {
     const runBacktest = async () => {
       try {
         const { signals, diagnostics, log } = await runTrendlineBacktest(
-          { pairs, fromMs, toMs, accountBalance, riskPercent, rewardRisk, minScore, maxOpenPositions, allowDuplicatePairs },
+          { pairs, fromMs, toMs, accountBalance, riskPercent, rewardRisk, minScore, maxOpenPositions, allowDuplicatePairs, swingLookback, tunables },
           c.env.TWELVE_DATA_API_KEY,
           (msg) => console.log(`[backtest ${runId}] ${msg}`),
           c.env.KV,

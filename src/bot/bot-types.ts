@@ -23,6 +23,15 @@ export const BOT_TYPE_REGISTRY: BotTypeDefinition[] = [
       minTouches:         2,
       riskPercent:        1.0,
       rewardRisk:         3.0,
+      // Trade-setup tuning — defaults match the values these were hardcoded to before
+      // becoming per-bot settings. See src/engines/trendline.ts DEFAULT_TRENDLINE_TUNABLES.
+      slBufferAtr:        0.1,
+      breakThresholdAtr:  0.5,
+      retestWindowBars:   6,
+      retestRecencyBars:  3,
+      touchToleranceAtr:  0.3,
+      minStopDistAtr:     0.2,
+      swingLookback:      5,
     },
   },
 ];
@@ -147,10 +156,8 @@ export async function seedBotsFromLegacyKV(
     pairs:     (legacy?.pairs as CurrencyPair[]) ?? [],
     accountId: null,
     settings: {
+      ...getBotTypeDefinition("trendline")!.defaultSettings,
       minConfidenceScore: (legacy?.minConfidenceScore as number) ?? 60,
-      minTouches:         2,
-      riskPercent:        1.0,
-      rewardRisk:         3.0,
     },
   });
 }

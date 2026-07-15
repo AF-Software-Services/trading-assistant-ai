@@ -2,7 +2,7 @@ import { PHASE1_PAIRS }                    from "../types/market.ts";
 import type { CurrencyPair }               from "../types/market.ts";
 import type { BotInstance }                from "./bot-types.ts";
 import { createMarketDataProvider }        from "../providers/factory.ts";
-import { detectTrendlineSignal }           from "../engines/trendline.ts";
+import { detectTrendlineSignal, pickTrendlineTunables } from "../engines/trendline.ts";
 import { storeTrendlineTrailState }        from "./monitor.ts";
 import { TradingService }                  from "../trading/service.ts";
 import { getAccount, updateAccountBalance, getPrimaryAccountBalance } from "../ctrader/account-types.ts";
@@ -170,6 +170,11 @@ export async function runBotScan(env: {
     ? (env.botInstance.settings["rewardRisk"] as number | undefined) ?? (riskSettings?.rewardRisk ?? 1.5)
     : riskSettings?.rewardRisk ?? 1.5;
 
+  // Trade-setup tuning — only meaningful per-bot; the legacy (no botInstance) path always
+  // ran on the hardcoded defaults, so it keeps doing that here.
+  const tunables = env.botInstance ? pickTrendlineTunables(env.botInstance.settings) : {};
+  const swingLookback = (env.botInstance?.settings["swingLookback"] as number | undefined) ?? 5;
+
   // Connect to the bot's assigned account; fall back to legacy global token
   const botAccount = env.botInstance?.accountId
     ? await getAccount(env.DB, env.botInstance.accountId)
@@ -246,10 +251,10 @@ export async function runBotScan(env: {
           provider.getCandles(pair, "4H", 200),
           provider.getCandles(pair, "D", 30),
         ]);
-        const tlSig = detectTrendlineSignal(candles4H, rrRatio, 5, candlesD);
+        const tlSig = detectTrendlineSignal(candles4H, rrRatio, swingLookback, candlesD, tunables);
 
         if (!tlSig) {
-          const tlNoBias = detectTrendlineSignal(candles4H, rrRatio, 5, undefined);
+          const tlNoBias = detectTrendlineSignal(candles4H, rrRatio, swingLookback, undefined, tunables);
           if (tlNoBias) {
             await saveBotSignal(env.DB, {
               id: crypto.randomUUID(), botId, pair,

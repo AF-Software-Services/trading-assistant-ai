@@ -1803,6 +1803,21 @@ html, body {
   font-family: monospace;
   width: 80px;
 }
+.bot-card-advanced {
+  margin: 4px 0 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.bot-card-advanced summary {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  margin-bottom: 10px;
+}
+.bot-card-advanced summary:hover { color: var(--accent); }
+.bot-card-advanced .bot-card-row:last-child { margin-bottom: 0; }
 .bot-card-actions {
   display: flex;
   gap: 6px;
