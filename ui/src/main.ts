@@ -1691,6 +1691,73 @@ function initAccounts(): void {
   })
 
   loadAccounts()
+  initDiscoverAccounts()
+}
+
+function initDiscoverAccounts(): void {
+  const btn  = document.getElementById('discover-accounts-btn') as HTMLButtonElement
+  const list = document.getElementById('discover-accounts-list')!
+
+  btn.addEventListener('click', async () => {
+    btn.textContent = 'Checking…'
+    btn.disabled = true
+    list.innerHTML = ''
+    try {
+      const res  = await fetch('/api/v1/ctrader/discover-accounts')
+      const data = await res.json() as {
+        tokenAccountId?: string
+        accounts?: Array<{ ctidTraderAccountId: number; isLive: boolean; traderLogin: number; brokerName: string; alreadyAdded: boolean }>
+        error?: string
+      }
+      if (data.error) { list.innerHTML = `<div class="bot-no-signals" style="color:var(--sell)">${data.error}</div>`; return }
+
+      const accounts = data.accounts ?? []
+      if (accounts.length === 0) {
+        list.innerHTML = '<div class="bot-no-signals">No accounts found on this cTrader ID.</div>'
+        return
+      }
+
+      list.innerHTML = accounts.map(a => `
+        <div class="discover-account-row">
+          <span class="acct-type-badge ${a.isLive ? 'acct-badge-live' : 'acct-badge-demo'}">${a.isLive ? 'LIVE' : 'DEMO'}</span>
+          <span>${a.brokerName || 'Trading Account'} #${a.ctidTraderAccountId}</span>
+          ${a.alreadyAdded
+            ? '<span class="discover-account-added">✓ Added</span>'
+            : `<button class="small-btn primary-btn discover-add-btn" data-id="${a.ctidTraderAccountId}" data-live="${a.isLive}">+ Add</button>`}
+        </div>
+      `).join('')
+
+      list.querySelectorAll<HTMLButtonElement>('.discover-add-btn').forEach(addBtn => {
+        addBtn.addEventListener('click', async () => {
+          addBtn.textContent = 'Adding…'
+          addBtn.disabled = true
+          try {
+            const res = await fetch('/api/v1/ctrader/accounts/adopt', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                ctidTraderAccountId: Number(addBtn.dataset.id),
+                isLive: addBtn.dataset.live === 'true',
+                tokenAccountId: data.tokenAccountId,
+              }),
+            })
+            if (!res.ok) throw new Error((await res.json() as { error?: string }).error ?? 'Failed to add account')
+            await loadAccounts()
+            btn.click() // refresh the discovery list so this account now shows "✓ Added"
+          } catch (e: any) {
+            alert(`Failed: ${e.message}`)
+            addBtn.textContent = '+ Add'
+            addBtn.disabled = false
+          }
+        })
+      })
+    } catch (e: any) {
+      list.innerHTML = `<div class="bot-no-signals" style="color:var(--sell)">${e.message}</div>`
+    } finally {
+      btn.textContent = '↻ Check Pepperstone'
+      btn.disabled = false
+    }
+  })
 }
 
 async function loadAccounts(): Promise<void> {

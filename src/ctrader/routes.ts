@@ -1,5 +1,5 @@
 import { Hono }           from 'hono';
-import { diagnoseCTrader, mergeDealsIntoTrades } from './client.ts';
+import { diagnoseCTrader, mergeDealsIntoTrades, getAccountsByToken } from './client.ts';
 import type { Position }   from './client.ts';
 import { TradingService }  from '../trading/service.ts';
 import {
@@ -210,6 +210,87 @@ export function createCTraderRouter() {
       accountType:  account?.type ?? 'demo',
     });
     return c.json(result);
+  });
+
+  // ── Discover accounts available via an already-connected account's token ──────
+  // A single OAuth token covers every account under the same cTrader ID — not just the
+  // one it was originally authorized for — so once ANY account is connected, every other
+  // account on that cTID (including ones created after the fact) can be listed and added
+  // with no further manual entry, instead of asking the user to type in a broker account
+  // ID (which is how a previous account ended up with its Login number instead of the
+  // actual ctidTraderAccountId the Open API needs).
+  app.get('/api/v1/ctrader/discover-accounts', async (c) => {
+    const accounts        = await listAccounts(c.env.DB);
+    const connected       = accounts.find(a => a.status === 'connected');
+    const legacyToken     = await c.env.KV.get('ctrader:access_token');
+    const token           = connected ? await c.env.KV.get(tokenKey(connected.id)) : legacyToken;
+    const tokenAccountId  = connected?.id ?? (legacyToken ? 'default' : null);
+
+    if (!token || !tokenAccountId) {
+      return c.json({ error: 'Connect at least one account first, then accounts on the same cTrader ID can be discovered automatically.' }, 400);
+    }
+
+    try {
+      const discovered = await getAccountsByToken({
+        clientId:     c.env.CTRADER_CLIENT_ID,
+        clientSecret: c.env.CTRADER_CLIENT_SECRET,
+        accessToken:  token,
+      });
+      const existingIds = new Set(accounts.map(a => a.ctraderAccountId));
+      return c.json({
+        tokenAccountId,
+        accounts: discovered.map(d => ({
+          ctidTraderAccountId: d.ctidTraderAccountId,
+          isLive:              d.isLive,
+          traderLogin:         d.traderLogin,
+          brokerName:          d.brokerName,
+          alreadyAdded:        existingIds.has(String(d.ctidTraderAccountId)),
+        })),
+      });
+    } catch (e) {
+      return c.json({ error: (e as Error).message }, 502);
+    }
+  });
+
+  // ── Adopt a discovered account — no manual ID entry, reuses an existing token ──
+  app.post('/api/v1/ctrader/accounts/adopt', async (c) => {
+    const body = await c.req.json<{
+      ctidTraderAccountId: number;
+      isLive:               boolean;
+      tokenAccountId:       string;
+      name?:                string;
+    }>().catch(() => null);
+    if (!body?.ctidTraderAccountId || !body.tokenAccountId) {
+      return c.json({ error: 'ctidTraderAccountId and tokenAccountId are required' }, 400);
+    }
+
+    const sourceToken   = body.tokenAccountId === 'default'
+      ? await c.env.KV.get('ctrader:access_token')
+      : await c.env.KV.get(tokenKey(body.tokenAccountId));
+    const sourceRefresh = body.tokenAccountId === 'default'
+      ? await c.env.KV.get('ctrader:refresh_token')
+      : await c.env.KV.get(refreshKey(body.tokenAccountId));
+    if (!sourceToken) return c.json({ error: 'Source account token not found' }, 400);
+
+    const account = await createAccount(c.env.DB, {
+      id:               crypto.randomUUID(),
+      name:             body.name ?? `${body.isLive ? 'Live' : 'Demo'} ${body.ctidTraderAccountId}`,
+      type:             body.isLive ? 'live' : 'demo',
+      ctraderAccountId: String(body.ctidTraderAccountId),
+      currency:         'GBP',
+      status:           'connected',
+    });
+
+    // Same token works for every account on this cTrader ID — no separate OAuth needed.
+    await c.env.KV.put(tokenKey(account.id), sourceToken);
+    if (sourceRefresh) await c.env.KV.put(refreshKey(account.id), sourceRefresh);
+
+    try {
+      const updated = await refreshAccountBalance(c.env, account.id);
+      return c.json(updated, 201);
+    } catch {
+      return c.json(account, 201); // adopted fine — balance will show once refreshed
+    }
   });
 
   // ── Open positions (account-aware) ───────────────────────────────────────────
