@@ -920,6 +920,27 @@ function renderPendingOrdersTable(rows: Array<PendingOrderRow & { account: { nam
   }).join('')
 }
 
+let positionsAccountFilter: string = 'all'
+
+// Populates the Live/Demo grouped account filter dropdown from cachedAccounts, preserving
+// the current selection if it's still a valid option (e.g. after a background refresh).
+function renderPositionsAccountFilter(): void {
+  const select = el<HTMLSelectElement>('positions-account-filter')
+  const live = cachedAccounts.filter(a => a.type === 'live')
+  const demo = cachedAccounts.filter(a => a.type === 'demo')
+
+  const optgroup = (label: string, accounts: any[]) => accounts.length === 0 ? '' : `
+    <optgroup label="${label}">
+      ${accounts.map(a => `<option value="${a.id}">${a.name}</option>`).join('')}
+    </optgroup>
+  `
+  select.innerHTML = `<option value="all">All Accounts</option>${optgroup('Live', live)}${optgroup('Demo', demo)}`
+
+  const stillValid = positionsAccountFilter === 'all' || cachedAccounts.some(a => a.id === positionsAccountFilter)
+  if (!stillValid) positionsAccountFilter = 'all'
+  select.value = positionsAccountFilter
+}
+
 async function loadPositions(): Promise<void> {
   el('positions-loading').classList.remove('hidden')
   el('positions-error').classList.add('hidden')
@@ -927,8 +948,13 @@ async function loadPositions(): Promise<void> {
   el('positions-table').classList.add('hidden')
 
   try {
-    // Pull positions from every connected account so multi-account setups show everything at once.
-    const targets = cachedAccounts.filter(a => a.hasToken)
+    renderPositionsAccountFilter()
+
+    // Pull positions from every connected account so multi-account setups show everything at
+    // once, unless the user has scoped down to "All", a type, or one specific account.
+    const targets = cachedAccounts.filter(a =>
+      a.hasToken && (positionsAccountFilter === 'all' || a.id === positionsAccountFilter)
+    )
     const queries = targets.length ? targets : [{ id: '', name: 'Default', type: 'demo' }]
 
     const results = await Promise.all(queries.map(async (a) => {
@@ -1456,6 +1482,10 @@ function init(): void {
   initCTrader()
   initExecuteModal()
   document.getElementById('refresh-positions')?.addEventListener('click', loadPositions)
+  document.getElementById('positions-account-filter')?.addEventListener('change', (e) => {
+    positionsAccountFilter = (e.target as HTMLSelectElement).value
+    loadPositions()
+  })
   document.getElementById('refresh-dashboard')?.addEventListener('click', loadDashboard)
   document.getElementById('refresh-history')?.addEventListener('click', loadHistory)
   document.getElementById('history-days')?.addEventListener('change', loadHistory)
