@@ -9,6 +9,7 @@ import {
   deleteAccount,
   updateAccountStatus,
   updateAccountBalance,
+  setAccountActive,
   seedDefaultAccount,
   tokenKey,
   refreshKey,
@@ -39,7 +40,8 @@ export function createCTraderRouter() {
 
   app.get('/api/v1/ctrader/accounts', async (c) => {
     await seedDefaultAccount(c.env.DB, c.env.KV, c.env.CTRADER_ACCOUNT_ID);
-    const accounts = await listAccounts(c.env.DB);
+    const includeInactive = c.req.query('includeInactive') === 'true';
+    const accounts = await listAccounts(c.env.DB, { includeInactive });
     // Enrich each account with whether it has a token in KV
     const enriched = await Promise.all(accounts.map(async (a) => {
       const hasToken = !!(await c.env.KV.get(tokenKey(a.id)));
@@ -79,6 +81,22 @@ export function createCTraderRouter() {
     await c.env.KV.delete(refreshKey(id));
     const ok = await deleteAccount(c.env.DB, id);
     if (!ok) return c.json({ error: 'Account not found' }, 404);
+    return c.json({ ok: true });
+  });
+
+  // ── Activate / deactivate — the normal way to stop using an account without losing its
+  // credentials or trade history. An inactive account is excluded everywhere except this
+  // management screen (see listAccounts's includeInactive) until switched back on.
+  app.post('/api/v1/ctrader/accounts/:id/activate', async (c) => {
+    const id = c.req.param('id');
+    if (!(await getAccount(c.env.DB, id))) return c.json({ error: 'Account not found' }, 404);
+    await setAccountActive(c.env.DB, id, true);
+    return c.json({ ok: true });
+  });
+  app.post('/api/v1/ctrader/accounts/:id/deactivate', async (c) => {
+    const id = c.req.param('id');
+    if (!(await getAccount(c.env.DB, id))) return c.json({ error: 'Account not found' }, 404);
+    await setAccountActive(c.env.DB, id, false);
     return c.json({ ok: true });
   });
 
@@ -220,7 +238,10 @@ export function createCTraderRouter() {
   // ID (which is how a previous account ended up with its Login number instead of the
   // actual ctidTraderAccountId the Open API needs).
   app.get('/api/v1/ctrader/discover-accounts', async (c) => {
-    const accounts        = await listAccounts(c.env.DB);
+    // Include inactive accounts here — a deactivated account still has a valid token (it's
+    // hidden, not disconnected) and should still count as "already added" so it isn't
+    // offered again and duplicated.
+    const accounts        = await listAccounts(c.env.DB, { includeInactive: true });
     const connected       = accounts.find(a => a.status === 'connected');
     const legacyToken     = await c.env.KV.get('ctrader:access_token');
     const token           = connected ? await c.env.KV.get(tokenKey(connected.id)) : legacyToken;
