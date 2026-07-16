@@ -21,6 +21,12 @@ let selectedTradeAccountId = ''
 // Dashboard/Positions/History instead of "All", but never fights a selection the user has
 // since made (see applyDefaultAccountSelection).
 let appliedDefaultAccountSelection = false
+// Set by initAccounts()'s first loadAccounts() call — lets other init paths (initBot()) wait
+// for cachedAccounts to be populated at least once before their own first render, instead of
+// racing it. Without this, a bot card's first render could land before accounts had loaded,
+// showing "— No account —" even though the bot's real accountId was correct all along; it
+// would self-correct on the next 30s poll, but only after alarming the user in the meantime.
+let initialAccountsLoad: Promise<void> | null = null
 
 // ── DOM helpers ───────────────────────────────────────────────────────────────
 function el<T extends HTMLElement>(id: string): T {
@@ -1768,7 +1774,7 @@ function initAccounts(): void {
     }
   })
 
-  loadAccounts()
+  initialAccountsLoad = loadAccounts()
   initDiscoverAccounts()
 }
 
@@ -2603,7 +2609,10 @@ function initBot(): void {
 
   cronLogRefresh.addEventListener('click', () => { cronLogOffset = 0; loadCronLog() })
 
-  loadBotStatus()
+  // Wait for accounts to have loaded at least once so the first render's account dropdowns
+  // are correct from the start, rather than racing loadAccounts() and rendering "— No account —"
+  // for a bot that actually does have one, until the next 30s poll self-corrects it.
+  ;(initialAccountsLoad ?? Promise.resolve()).then(loadBotStatus)
   loadCronLog()
   // Guard against duplicate polling loops if initBot() is ever invoked more than once
   // (e.g. a future re-init path) — without this, each call stacks another interval that
