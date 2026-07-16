@@ -2195,6 +2195,32 @@ function initBot(): void {
             </select>
           </div>
         </div>
+        <div class="bot-card-row">
+          <span class="bot-card-label">Sessions</span>
+          <div class="bot-card-setting" style="align-items:center;gap:6px">
+            <input type="checkbox" ${bot.settings.allowAsianSession !== false ? 'checked' : ''}
+              data-bot-id="${bot.id}" data-key="allowAsianSession" />
+            <span style="font-size:10px;color:var(--muted)">Asian</span>
+          </div>
+          <div class="bot-card-setting" style="align-items:center;gap:6px">
+            <input type="checkbox" ${bot.settings.allowLondonSession !== false ? 'checked' : ''}
+              data-bot-id="${bot.id}" data-key="allowLondonSession" />
+            <span style="font-size:10px;color:var(--muted)">London</span>
+          </div>
+          <div class="bot-card-setting" style="align-items:center;gap:6px">
+            <input type="checkbox" ${bot.settings.allowNySession !== false ? 'checked' : ''}
+              data-bot-id="${bot.id}" data-key="allowNySession" />
+            <span style="font-size:10px;color:var(--muted)">NY</span>
+          </div>
+        </div>
+        <div class="bot-card-row">
+          <span class="bot-card-label">Candle Confirm</span>
+          <div class="bot-card-setting" style="align-items:center;gap:6px">
+            <input type="checkbox" ${bot.settings.requireCandleConfirmation ? 'checked' : ''}
+              data-bot-id="${bot.id}" data-key="requireCandleConfirmation" />
+            <span style="font-size:10px;color:var(--muted)">require engulfing/hammer at retest</span>
+          </div>
+        </div>
       </details>` : ''
 
     const acct       = cachedAccounts.find(a => a.id === bot.accountId)

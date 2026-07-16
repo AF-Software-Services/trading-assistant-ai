@@ -36,6 +36,15 @@ export const BOT_TYPE_REGISTRY: BotTypeDefinition[] = [
       // "atLevel" = target the next opposing S/R zone instead, falling back to "rr"
       // when no zone is found ahead or it wouldn't produce a sane R:R.
       tpMode:             "rr",
+      // Session filter — all true by default (no filtering, matches previous behavior).
+      // Session is derived from the retest candle's UTC hour: see getTradingSession().
+      allowAsianSession:  true,
+      allowLondonSession: true,
+      allowNySession:     true,
+      // Require the retest candle to be a bullish/bearish engulfing (or hammer/shooting
+      // star) in the break direction, not just a close on the right side of the line.
+      // Off by default — matches previous behavior, which never checked this.
+      requireCandleConfirmation: false,
     },
   },
 ];

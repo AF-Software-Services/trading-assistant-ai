@@ -2,8 +2,8 @@ import type { Candle, CurrencyPair, Timeframe } from "../types/market.ts";
 import { calculateATR } from "../engines/trend.ts";
 import { calcLots } from "../bot/engine.ts";
 import type { BotSignal } from "../bot/engine.ts";
-import { detectTrendlineSignal } from "../engines/trendline.ts";
-import type { TrendlineTunables, TpMode } from "../engines/trendline.ts";
+import { detectTrendlineSignal, getTradingSession } from "../engines/trendline.ts";
+import type { TrendlineTunables, TpMode, TradingSession } from "../engines/trendline.ts";
 
 // Approximate GBP pip value per standard lot
 const PIP_VALUE_GBP: Record<string, number> = {
@@ -33,6 +33,8 @@ export interface BacktestConfig {
   swingLookback:       number;
   tunables:             Partial<TrendlineTunables>;
   tpMode:               TpMode;
+  requireCandleConfirmation: boolean;
+  allowedSessions:      Record<TradingSession, boolean>;
 }
 
 interface TwelveDataCandle {
@@ -291,10 +293,10 @@ export async function runTrendlineBacktest(
         continue;
       }
 
-      const sig = detectTrendlineSignal(history, config.rewardRisk, config.swingLookback, dHistory, config.tunables, config.tpMode);
+      const sig = detectTrendlineSignal(history, config.rewardRisk, config.swingLookback, dHistory, config.tunables, config.tpMode, config.requireCandleConfirmation);
       if (!sig) {
         // Secondary pass without daily bias — distinguishes "no pattern" from "bias filtered"
-        const sigNoBias = detectTrendlineSignal(history, config.rewardRisk, config.swingLookback, undefined, config.tunables, config.tpMode);
+        const sigNoBias = detectTrendlineSignal(history, config.rewardRisk, config.swingLookback, undefined, config.tunables, config.tpMode, config.requireCandleConfirmation);
         if (sigNoBias) {
           rejections["daily_bias_filter"] = (rejections["daily_bias_filter"] ?? 0) + 1;
         } else {
@@ -305,6 +307,12 @@ export async function runTrendlineBacktest(
 
       if (sig.score < config.minScore) {
         rejections["score_too_low"] = (rejections["score_too_low"] ?? 0) + 1;
+        continue;
+      }
+
+      const retestHourUtc = new Date(history[sig.retestIndex]!.timestamp).getUTCHours();
+      if (!config.allowedSessions[getTradingSession(retestHourUtc)]) {
+        rejections["session_filter"] = (rejections["session_filter"] ?? 0) + 1;
         continue;
       }
 
