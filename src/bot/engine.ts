@@ -174,6 +174,7 @@ export async function runBotScan(env: {
   // ran on the hardcoded defaults, so it keeps doing that here.
   const tunables = env.botInstance ? pickTrendlineTunables(env.botInstance.settings) : {};
   const swingLookback = (env.botInstance?.settings["swingLookback"] as number | undefined) ?? 5;
+  const tpMode = ((env.botInstance?.settings["tpMode"] as string | undefined) === "atLevel" ? "atLevel" : "rr") as "rr" | "atLevel";
 
   // Connect to the bot's assigned account; fall back to legacy global token
   const botAccount = env.botInstance?.accountId
@@ -251,10 +252,10 @@ export async function runBotScan(env: {
           provider.getCandles(pair, "4H", 200),
           provider.getCandles(pair, "D", 30),
         ]);
-        const tlSig = detectTrendlineSignal(candles4H, rrRatio, swingLookback, candlesD, tunables);
+        const tlSig = detectTrendlineSignal(candles4H, rrRatio, swingLookback, candlesD, tunables, tpMode);
 
         if (!tlSig) {
-          const tlNoBias = detectTrendlineSignal(candles4H, rrRatio, swingLookback, undefined, tunables);
+          const tlNoBias = detectTrendlineSignal(candles4H, rrRatio, swingLookback, undefined, tunables, tpMode);
           if (tlNoBias) {
             await saveBotSignal(env.DB, {
               id: crypto.randomUUID(), botId, pair,

@@ -14,6 +14,9 @@
 
 import type { Candle } from "../types/market.ts";
 import { calculateATR } from "./trend.ts";
+import { detectZones, getNearestZone } from "./support-resistance.ts";
+
+export type TpMode = "rr" | "atLevel";
 
 export interface DetectedLine {
   type:    "resistance" | "support";
@@ -256,6 +259,26 @@ function buildLines(
   return result.slice(0, 4);
 }
 
+// ── TP-at-level targeting ───────────────────────────────────────────────────────
+
+// Finds the nearest opposing S/R zone ahead of entry in the trade's direction, reusing the
+// same zone detection the chart overlay uses. Returns null if none exists (e.g. clear air
+// ahead) — the caller falls back to the R:R-based target rather than leaving TP unset.
+function findTpAtLevel(
+  candles:    Candle[],
+  entryPrice: number,
+  breakDir:   "buy" | "sell",
+  atr:        number,
+): number | null {
+  const zones      = detectZones(candles, "4H", atr);
+  const targetType = breakDir === "buy" ? "resistance" : "support";
+  const ahead       = zones.filter(z =>
+    targetType === "resistance" ? z.midpoint > entryPrice : z.midpoint < entryPrice
+  );
+  const nearest = getNearestZone(entryPrice, ahead, targetType);
+  return nearest ? nearest.midpoint : null;
+}
+
 // ── Detect breakout from a single trendline ───────────────────────────────────
 
 /**
@@ -270,6 +293,7 @@ function detectSetupForLine(
   rrRatio:   number,
   dailyBias: "bullish" | "bearish" | "neutral",
   tunables:  TrendlineTunables,
+  tpMode:    TpMode,
 ): TrendlineSignal | null {
   // Direction follows line type: resistance break → long, support break → short
   const breakDir: "buy" | "sell" = line.type === "resistance" ? "buy" : "sell";
@@ -332,9 +356,21 @@ function detectSetupForLine(
   const stopDist = Math.abs(entryPrice - stopLoss);
   if (stopDist < atr * tunables.minStopDistAtr) return null;
 
-  const takeProfit = breakDir === "buy"
+  const rrTakeProfit = breakDir === "buy"
     ? entryPrice + stopDist * rrRatio
     : entryPrice - stopDist * rrRatio;
+
+  // atLevel targets the next opposing S/R zone instead of a fixed R:R multiple — but only
+  // if that target is at least as far as the stop (R:R >= 1). A zone sitting almost on top
+  // of entry would otherwise produce a trade with worse-than-coinflip payoff economics;
+  // falling back to the R:R target in that case keeps every trade's reward sane.
+  let takeProfit = rrTakeProfit;
+  if (tpMode === "atLevel") {
+    const levelTarget = findTpAtLevel(candles, entryPrice, breakDir, atr);
+    if (levelTarget !== null && Math.abs(levelTarget - entryPrice) >= stopDist) {
+      takeProfit = levelTarget;
+    }
+  }
 
   // ── Scoring ───────────────────────────────────────────────────────────────────
   let score = 55;
@@ -380,6 +416,7 @@ export function detectTrendlineSignal(
   lookback      = 5,
   dailyCandles?: Candle[],
   tunables:     Partial<TrendlineTunables> = {},
+  tpMode:       TpMode = "rr",
 ): TrendlineSignal | null {
   if (candles.length < 50) return null;
 
@@ -401,12 +438,12 @@ export function detectTrendlineSignal(
   const signals: TrendlineSignal[] = [];
 
   for (const line of resistanceLines) {
-    const sig = detectSetupForLine(candles, line, atr, rrRatio, dailyBias, t);
+    const sig = detectSetupForLine(candles, line, atr, rrRatio, dailyBias, t, tpMode);
     if (sig) signals.push(sig);
   }
 
   for (const line of supportLines) {
-    const sig = detectSetupForLine(candles, line, atr, rrRatio, dailyBias, t);
+    const sig = detectSetupForLine(candles, line, atr, rrRatio, dailyBias, t, tpMode);
     if (sig) signals.push(sig);
   }
 

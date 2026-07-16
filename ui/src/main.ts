@@ -2186,6 +2186,15 @@ function initBot(): void {
             <span style="font-size:10px;color:var(--muted)">bars each side</span>
           </div>
         </div>
+        <div class="bot-card-row">
+          <span class="bot-card-label">TP Mode</span>
+          <div class="bot-card-setting">
+            <select class="small-select" data-bot-id="${bot.id}" data-key="tpMode">
+              <option value="rr" ${(bot.settings.tpMode ?? 'rr') === 'rr' ? 'selected' : ''}>Fixed R:R</option>
+              <option value="atLevel" ${bot.settings.tpMode === 'atLevel' ? 'selected' : ''}>At next S/R level</option>
+            </select>
+          </div>
+        </div>
       </details>` : ''
 
     const acct       = cachedAccounts.find(a => a.id === bot.accountId)
@@ -2289,8 +2298,10 @@ function initBot(): void {
         const allActive   = activePills.length === ALL_PAIRS.length
         const pairs = allActive ? [] : Array.from(activePills).map(p => p.dataset.pair!)
         const settings: Record<string, unknown> = {}
-        card.querySelectorAll<HTMLInputElement>('[data-key]').forEach(inp => {
-          settings[inp.dataset.key!] = inp.type === 'checkbox' ? inp.checked : Number(inp.value)
+        card.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-key]').forEach(inp => {
+          settings[inp.dataset.key!] = inp.tagName === 'SELECT'
+            ? inp.value
+            : (inp as HTMLInputElement).type === 'checkbox' ? (inp as HTMLInputElement).checked : Number(inp.value)
         })
         const accountId = card.querySelector<HTMLSelectElement>('.bot-account-select')?.value || null
         const res = await fetch(`/api/v1/bot/bots/${botId}`, {
