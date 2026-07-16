@@ -1642,6 +1642,16 @@ html, body {
   background: rgba(139,148,158,0.15);
   color: var(--muted);
 }
+.acct-default-badge {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+  background: rgba(240,182,52,0.15);
+  color: #f0b634;
+}
 .account-row-left {
   display: flex;
   align-items: center;
