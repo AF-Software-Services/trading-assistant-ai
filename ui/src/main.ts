@@ -17,6 +17,10 @@ let defaultSlPips  = 50
 let tradeDirection: 'buy' | 'sell' = 'buy'
 let cachedAccounts: any[] = []
 let selectedTradeAccountId = ''
+// Applied once per page load — the account marked "default" becomes the initial view in
+// Dashboard/Positions/History instead of "All", but never fights a selection the user has
+// since made (see applyDefaultAccountSelection).
+let appliedDefaultAccountSelection = false
 
 // ── DOM helpers ───────────────────────────────────────────────────────────────
 function el<T extends HTMLElement>(id: string): T {
@@ -1161,6 +1165,13 @@ function accountsOfDashboardType(): any[] {
 }
 
 function renderDashboardAccountTabs(): void {
+  // Keep the Live/Demo type tab in sync with dashboardAccountType — needed because that
+  // value can change without a click (e.g. the default-account selection on first load),
+  // and the HTML's hardcoded "active" class on Live otherwise never gets corrected.
+  document.querySelectorAll<HTMLButtonElement>('.dash-type-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.type === dashboardAccountType)
+  })
+
   const wrap = el('dash-account-tabs')
   const accounts = accountsOfDashboardType()
 
@@ -1845,9 +1856,25 @@ async function loadAccounts(): Promise<void> {
       attachAccountRowEvents()
     }
     updateAccountSelector(cachedAccounts)
+    applyDefaultAccountSelection()
   } catch (e: any) {
     list.innerHTML = `<div class="bot-no-signals" style="color:var(--sell)">Error: ${e.message}</div>`
   }
+}
+
+// Points Dashboard/Positions/History at the default account on first load, once accounts
+// are known. Runs only once per page load — after that, whatever the user has selected wins,
+// even if loadAccounts() is called again later (e.g. after a Connect/Deactivate action).
+function applyDefaultAccountSelection(): void {
+  if (appliedDefaultAccountSelection) return
+  appliedDefaultAccountSelection = true
+  const defaultAccount = cachedAccounts.find(a => a.isDefault)
+  if (!defaultAccount) return
+
+  dashboardAccountType       = defaultAccount.type
+  dashboardSelectedAccountId = defaultAccount.id
+  positionsAccountFilter     = defaultAccount.id
+  historyAccountFilter       = defaultAccount.id
 }
 
 const CURRENCY_SYMBOLS: Record<string, string> = { GBP: '£', USD: '$', EUR: '€' }
@@ -1877,12 +1904,18 @@ function renderAccountRow(a: any): string {
   const refreshBtn = connected
     ? `<button class="small-btn acct-refresh-balance-btn" data-acct-id="${a.id}" title="Refresh balance">↻</button>`
     : ''
+  // The default account is what Dashboard/Positions/History etc. show initially instead
+  // of "All" — only one account can hold it at a time (enforced server-side).
+  const defaultToggleBtn = a.isDefault
+    ? `<button class="small-btn primary-btn acct-unset-default-btn" data-acct-id="${a.id}">★ Default</button>`
+    : `<button class="small-btn acct-set-default-btn" data-acct-id="${a.id}">☆ Set Default</button>`
 
   return `<div class="account-row ${a.isActive ? '' : 'account-row-inactive'}" data-acct-id="${a.id}">
     <div class="account-row-left">
       <span class="account-name">${a.name}</span>
       <span class="acct-type-badge ${typeCls}">${typeLabel}</span>
       ${a.isActive ? '' : '<span class="acct-inactive-badge">INACTIVE</span>'}
+      ${a.isDefault ? '<span class="acct-default-badge">DEFAULT</span>' : ''}
       <span class="account-meta">#${a.ctraderAccountId} · ${a.currency}</span>
       <span class="account-balance">${formatBalance(a)}</span>
     </div>
@@ -1890,6 +1923,7 @@ function renderAccountRow(a: any): string {
       <span class="${statusCls}">${statusDot} ${statusLbl}</span>
       ${refreshBtn}
       ${connectBtn}
+      ${defaultToggleBtn}
       ${activeToggleBtn}
     </div>
   </div>`
@@ -1923,6 +1957,22 @@ function attachAccountRowEvents(): void {
       btn.textContent = '…'
       btn.disabled = true
       await fetch(`/api/v1/ctrader/accounts/${btn.dataset.acctId}/activate`, { method: 'POST' })
+      await loadAccounts()
+    })
+  })
+  document.querySelectorAll<HTMLButtonElement>('.acct-set-default-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.textContent = '…'
+      btn.disabled = true
+      await fetch(`/api/v1/ctrader/accounts/${btn.dataset.acctId}/set-default`, { method: 'POST' })
+      await loadAccounts()
+    })
+  })
+  document.querySelectorAll<HTMLButtonElement>('.acct-unset-default-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.textContent = '…'
+      btn.disabled = true
+      await fetch(`/api/v1/ctrader/accounts/${btn.dataset.acctId}/unset-default`, { method: 'POST' })
       await loadAccounts()
     })
   })

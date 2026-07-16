@@ -10,6 +10,7 @@ import {
   updateAccountStatus,
   updateAccountBalance,
   setAccountActive,
+  setAccountDefault,
   seedDefaultAccount,
   tokenKey,
   refreshKey,
@@ -98,6 +99,21 @@ export function createCTraderRouter() {
     const id = c.req.param('id');
     if (!(await getAccount(c.env.DB, id))) return c.json({ error: 'Account not found' }, 404);
     await setAccountActive(c.env.DB, id, false);
+    return c.json({ ok: true });
+  });
+
+  // ── Default account — the one Dashboard/Positions/History etc. show initially instead
+  // of "All". Only one account can be default at a time (see setAccountDefault).
+  app.post('/api/v1/ctrader/accounts/:id/set-default', async (c) => {
+    const id = c.req.param('id');
+    if (!(await getAccount(c.env.DB, id))) return c.json({ error: 'Account not found' }, 404);
+    await setAccountDefault(c.env.DB, id, true);
+    return c.json({ ok: true });
+  });
+  app.post('/api/v1/ctrader/accounts/:id/unset-default', async (c) => {
+    const id = c.req.param('id');
+    if (!(await getAccount(c.env.DB, id))) return c.json({ error: 'Account not found' }, 404);
+    await setAccountDefault(c.env.DB, id, false);
     return c.json({ ok: true });
   });
 

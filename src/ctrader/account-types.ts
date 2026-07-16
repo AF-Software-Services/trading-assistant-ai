@@ -9,6 +9,7 @@ export interface CTraderAccount {
   balance:           number | null;   // live balance from cTrader, cached
   balanceUpdatedAt:  number | null;
   isActive:          boolean;   // inactive accounts are hidden everywhere except account management
+  isDefault:         boolean;   // the account Dashboard/Positions/History etc. show initially instead of "All"
 }
 
 // ── D1 helpers ────────────────────────────────────────────────────────────────
@@ -33,14 +34,14 @@ export async function getAccount(db: D1Database, id: string): Promise<CTraderAcc
 
 export async function createAccount(
   db: D1Database,
-  account: Omit<CTraderAccount, 'createdAt' | 'balance' | 'balanceUpdatedAt' | 'isActive'>,
+  account: Omit<CTraderAccount, 'createdAt' | 'balance' | 'balanceUpdatedAt' | 'isActive' | 'isDefault'>,
 ): Promise<CTraderAccount> {
   const now = Date.now();
   await db.prepare(
     `INSERT INTO ctrader_accounts (id, name, type, ctrader_account_id, currency, status, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).bind(account.id, account.name, account.type, account.ctraderAccountId, account.currency, account.status, now).run();
-  return { ...account, createdAt: now, balance: null, balanceUpdatedAt: null, isActive: true };
+  return { ...account, createdAt: now, balance: null, balanceUpdatedAt: null, isActive: true, isDefault: false };
 }
 
 export async function updateAccountStatus(
@@ -55,6 +56,15 @@ export async function updateAccountStatus(
 // just stops showing up anywhere data is scoped by account, until reactivated.
 export async function setAccountActive(db: D1Database, id: string, active: boolean): Promise<void> {
   await db.prepare(`UPDATE ctrader_accounts SET is_active = ? WHERE id = ?`).bind(active ? 1 : 0, id).run();
+}
+
+// Only one account can be the default at a time — setting a new one clears the flag off
+// every other account first, so views that key off "the" default account never see two.
+export async function setAccountDefault(db: D1Database, id: string, isDefault: boolean): Promise<void> {
+  if (isDefault) {
+    await db.prepare(`UPDATE ctrader_accounts SET is_default = 0 WHERE id != ?`).bind(id).run();
+  }
+  await db.prepare(`UPDATE ctrader_accounts SET is_default = ? WHERE id = ?`).bind(isDefault ? 1 : 0, id).run();
 }
 
 // Best-known real account balance to use as a sizing default when nothing more
@@ -95,6 +105,7 @@ function rowToAccount(row: Record<string, unknown>): CTraderAccount {
     balance:          (row['balance']            as number | null) ?? null,
     balanceUpdatedAt: (row['balance_updated_at'] as number | null) ?? null,
     isActive:         (row['is_active'] as number | null) !== 0,
+    isDefault:        (row['is_default'] as number | null) === 1,
   };
 }
 
