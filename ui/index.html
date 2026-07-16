@@ -153,8 +153,10 @@
     <!-- Main content area -->
     <main id="main-content">
 
-      <!-- Mobile-only top bar -->
-      <div id="mobile-topbar">
+      <!-- Mobile-only top bar — same chart-only controls as the sidebar (pair/timeframe),
+           hidden on every tab except Chart by initTabs() in main.ts. Starts hidden since
+           Dashboard is the default landing tab. -->
+      <div id="mobile-topbar" class="hidden">
         <button id="mobile-menu-btn" aria-label="Menu">☰</button>
         <span id="mobile-pair-display">EUR/USD</span>
         <div id="mobile-tf-buttons">
