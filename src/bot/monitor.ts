@@ -7,7 +7,11 @@
  */
 
 import { TradingService }                  from "../trading/service.ts";
+import type { MarketDataProvider }         from "../providers/interface.ts";
 import { getBotSignals, updateBotSignalStatus, recordBotSignalOutcome, clearBotSignalJournalId } from "./engine.ts";
+import type { BotSignal }                  from "./signal-store.ts";
+import { listBots }                        from "./bot-types.ts";
+import { getAccount }                      from "../ctrader/account-types.ts";
 import { updateJournalOutcome, deleteJournalEntry } from "../storage/journal.ts";
 import { createMarketDataProvider }        from "../providers/factory.ts";
 import { calculateATR }                    from "../engines/trend.ts";
@@ -40,13 +44,48 @@ function pipFactor(pair: string): number {
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 
 export async function monitorPositions(env: Env): Promise<void> {
-  const trading = await TradingService.tryConnect(env);
-  if (!trading) return;
-
   const executedSignals = await getBotSignals(env.DB, { status: "executed", limit: 20 });
   const openSignals     = executedSignals.filter(s => s.ctraderPositionId !== null);
   if (openSignals.length === 0) return;
 
+  const provider = createMarketDataProvider({
+    provider: env.MARKET_DATA_PROVIDER ?? "live",
+    apiKey:   env.TWELVE_DATA_API_KEY,
+    kv:       env.KV,
+  });
+
+  // Group by the account each signal's bot is actually assigned to — a single shared
+  // connection here (as this used to be, always the legacy "default" account) meant every
+  // other account's positions/history/cancel checks ran against the wrong account entirely,
+  // so e.g. cancelling an expired order always came back ORDER_NOT_FOUND (that account never
+  // had it) no matter what actually happened to the order on its real account.
+  const bots            = await listBots(env.DB);
+  const botAccountId    = new Map(bots.map(b => [b.id, b.accountId]));
+  const signalsByAccount = new Map<string, BotSignal[]>();
+  for (const signal of openSignals) {
+    const accountId = botAccountId.get(signal.botId) ?? "default";
+    const bucket = signalsByAccount.get(accountId);
+    if (bucket) bucket.push(signal); else signalsByAccount.set(accountId, [signal]);
+  }
+
+  for (const [accountId, signals] of signalsByAccount) {
+    const trading = accountId === "default"
+      ? await TradingService.tryConnect(env)
+      : await (async () => {
+          const account = await getAccount(env.DB, accountId);
+          return account ? await TradingService.tryConnectToAccount(env, account) : null;
+        })();
+    if (!trading) continue;
+    await monitorAccountSignals(env, trading, signals, provider);
+  }
+}
+
+async function monitorAccountSignals(
+  env:      Env,
+  trading:  TradingService,
+  signals:  BotSignal[],
+  provider: MarketDataProvider,
+): Promise<void> {
   let openPositions;
   try {
     openPositions = await trading.getPositions();
@@ -56,13 +95,7 @@ export async function monitorPositions(env: Env): Promise<void> {
   }
   const openPositionMap = new Map(openPositions.map(p => [p.positionId, p]));
 
-  const provider = createMarketDataProvider({
-    provider: env.MARKET_DATA_PROVIDER ?? "live",
-    apiKey:   env.TWELVE_DATA_API_KEY,
-    kv:       env.KV,
-  });
-
-  for (const signal of openSignals) {
+  for (const signal of signals) {
     const posId    = signal.ctraderPositionId!;
     const position = openPositionMap.get(posId);
 
