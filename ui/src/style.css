@@ -335,91 +335,6 @@ html, body {
   color: var(--muted);
 }
 
-#risk-btn-wrap {
-  position: relative;
-}
-
-#risk-settings-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 12px;
-  padding: 4px 10px;
-  white-space: nowrap;
-}
-
-#risk-settings-btn:hover,
-#risk-settings-btn.active {
-  border-color: var(--accent);
-  color: var(--text);
-}
-
-#risk-dropdown {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  background: #1a1d23;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.8);
-  padding: 14px 16px;
-  width: 240px;
-  z-index: 200;
-}
-
-.risk-dropdown-title {
-  color: var(--text);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  margin-bottom: 12px;
-  text-transform: uppercase;
-}
-
-.risk-dropdown-row {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-bottom: 10px;
-}
-
-.risk-dropdown-row label {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.risk-balance-value {
-  font-size: 16px;
-  font-weight: 700;
-  font-family: monospace;
-  color: var(--text);
-}
-
-.risk-balance-hint {
-  font-size: 10px;
-  color: var(--accent);
-  margin-top: -4px;
-  margin-bottom: 4px;
-}
-
-.risk-dropdown-divider {
-  border-top: 1px solid var(--border);
-  margin: 10px 0;
-}
-
-.risk-dropdown-summary {
-  color: var(--muted);
-  font-size: 12px;
-  text-align: right;
-}
-
-.risk-dropdown-summary strong {
-  color: var(--buy);
-  font-size: 14px;
-}
-
 /* ── Execute trade button ─────────────────────────────────────────────────── */
 #execute-trade-btn {
   margin-top: 6px;
@@ -2327,8 +2242,7 @@ html, body {
   /* Hide drawing tools and separator on mobile */
   .tab-bar-separator,
   .draw-tool-btn,
-  .draw-hint-inline,
-  #risk-btn-wrap {
+  .draw-hint-inline {
     display: none !important;
   }
 
