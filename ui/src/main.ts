@@ -1265,38 +1265,31 @@ async function loadDashboard(): Promise<void> {
     }
     el('dashboard-empty').classList.add('hidden')
 
-    const accountIdsParam = queries.map(a => a.id).join(',')
-    const [summaryRes, ...positionResults] = await Promise.all([
-      fetch(`/api/v1/dashboard/summary?accountIds=${encodeURIComponent(accountIdsParam)}`),
-      ...queries.map(async (a) => {
-        try {
-          const res  = await fetch(`/api/v1/ctrader/positions?accountId=${encodeURIComponent(a.id)}`)
-          const data = await res.json() as { positions?: PositionRow[]; pendingOrders?: PendingOrderRow[] }
-          return { account: a, positions: data.positions ?? [], pendingOrders: data.pendingOrders ?? [] }
-        } catch {
-          return { account: a, positions: [] as PositionRow[], pendingOrders: [] as PendingOrderRow[] }
-        }
-      }),
-    ])
-
-    const summary = await summaryRes.json() as DashboardSummary
-    const positions = positionResults.flatMap(r => r.positions.map(p => ({ ...p, account: r.account })))
-    const pendingOrders = positionResults.flatMap(r => r.pendingOrders.map(o => ({ ...o, account: r.account })))
+    // Balance is already cached on each account (kept fresh by loadAccounts() above) — show
+    // it immediately rather than waiting on either section below.
     const totalBalance = queries.reduce((sum, a) => sum + (a.balance ?? 0), 0)
-    const openPnl = positions.reduce((sum: number, p: any) => sum + (p.profit ?? 0), 0)
-
-    el('dashboard-loading').classList.add('hidden')
-
     el<HTMLElement>('dash-balance').textContent = totalBalance > 0 ? `£${totalBalance.toFixed(2)}` : '—'
 
-    el<HTMLElement>('dash-open-count').textContent = String(positions.length)
-    const openPnlEl = el<HTMLElement>('dash-open-pnl')
-    if (positions.length > 0 && Number.isFinite(openPnl)) {
-      openPnlEl.textContent = `${openPnl >= 0 ? '+' : ''}£${openPnl.toFixed(2)} unrealised`
-      openPnlEl.className = `dash-card-sub ${openPnl > 0 ? 'buy' : openPnl < 0 ? 'sell' : ''}`
-    } else {
-      openPnlEl.textContent = ''
-    }
+    el('dashboard-loading').classList.add('hidden')
+    el('dashboard-content').classList.remove('hidden')
+
+    // Two independent sections with very different costs — summary is a D1/KV read (fast),
+    // positions is a live cTrader round-trip per account (can take seconds). Each renders
+    // into its own DOM region as soon as it resolves, instead of one gating the other.
+    void loadDashboardSummary(queries)
+    void loadDashboardPositions(queries)
+  } catch (e) {
+    el('dashboard-loading').classList.add('hidden')
+    el<HTMLElement>('dashboard-error').textContent = (e as Error).message
+    el('dashboard-error').classList.remove('hidden')
+  }
+}
+
+async function loadDashboardSummary(queries: any[]): Promise<void> {
+  try {
+    const accountIdsParam = queries.map(a => a.id).join(',')
+    const res     = await fetch(`/api/v1/dashboard/summary?accountIds=${encodeURIComponent(accountIdsParam)}`)
+    const summary = await res.json() as DashboardSummary
 
     const streakEl = el<HTMLElement>('dash-streak')
     if (summary.currentStreak.type) {
@@ -1308,6 +1301,47 @@ async function loadDashboard(): Promise<void> {
       streakEl.className = `dash-card-value ${summary.currentStreak.type === 'win' ? 'buy' : 'sell'}`
     } else {
       streakEl.textContent = '—'
+    }
+
+    el('dash-period-today').innerHTML = renderPeriodCard(summary.periods.today)
+    el('dash-period-week').innerHTML  = renderPeriodCard(summary.periods.week)
+    el('dash-period-month').innerHTML = renderPeriodCard(summary.periods.month)
+    el('dash-period-year').innerHTML  = renderPeriodCard(summary.periods.year)
+
+    el('dash-winrate-ring').innerHTML  = renderWinRateRing(summary.allTime)
+    el('dash-equity-curve').innerHTML  = renderDashboardEquityCurve(summary.equityCurve)
+    el('dash-period-bars').innerHTML   = renderPeriodBars(summary.periods)
+    el('dash-pair-bars').innerHTML     = renderPairBars(summary.byPair)
+  } catch (e) {
+    console.error('[Dashboard] Failed to load summary:', e)
+    el('dash-streak').textContent = '—'
+  }
+}
+
+async function loadDashboardPositions(queries: any[]): Promise<void> {
+  el('dash-positions-loading').classList.remove('hidden')
+  try {
+    const positionResults = await Promise.all(queries.map(async (a) => {
+      try {
+        const res  = await fetch(`/api/v1/ctrader/positions?accountId=${encodeURIComponent(a.id)}`)
+        const data = await res.json() as { positions?: PositionRow[]; pendingOrders?: PendingOrderRow[] }
+        return { account: a, positions: data.positions ?? [], pendingOrders: data.pendingOrders ?? [] }
+      } catch {
+        return { account: a, positions: [] as PositionRow[], pendingOrders: [] as PendingOrderRow[] }
+      }
+    }))
+
+    const positions     = positionResults.flatMap(r => r.positions.map(p => ({ ...p, account: r.account })))
+    const pendingOrders = positionResults.flatMap(r => r.pendingOrders.map(o => ({ ...o, account: r.account })))
+    const openPnl        = positions.reduce((sum: number, p: any) => sum + (p.profit ?? 0), 0)
+
+    el<HTMLElement>('dash-open-count').textContent = String(positions.length)
+    const openPnlEl = el<HTMLElement>('dash-open-pnl')
+    if (positions.length > 0 && Number.isFinite(openPnl)) {
+      openPnlEl.textContent = `${openPnl >= 0 ? '+' : ''}£${openPnl.toFixed(2)} unrealised`
+      openPnlEl.className = `dash-card-sub ${openPnl > 0 ? 'buy' : openPnl < 0 ? 'sell' : ''}`
+    } else {
+      openPnlEl.textContent = ''
     }
 
     const listEl = el('dash-positions-list')
@@ -1375,22 +1409,11 @@ async function loadDashboard(): Promise<void> {
         </div>`
       }).join('')
     }
-
-    el('dash-period-today').innerHTML = renderPeriodCard(summary.periods.today)
-    el('dash-period-week').innerHTML  = renderPeriodCard(summary.periods.week)
-    el('dash-period-month').innerHTML = renderPeriodCard(summary.periods.month)
-    el('dash-period-year').innerHTML  = renderPeriodCard(summary.periods.year)
-
-    el('dash-winrate-ring').innerHTML  = renderWinRateRing(summary.allTime)
-    el('dash-equity-curve').innerHTML  = renderDashboardEquityCurve(summary.equityCurve)
-    el('dash-period-bars').innerHTML   = renderPeriodBars(summary.periods)
-    el('dash-pair-bars').innerHTML     = renderPairBars(summary.byPair)
-
-    el('dashboard-content').classList.remove('hidden')
   } catch (e) {
-    el('dashboard-loading').classList.add('hidden')
-    el<HTMLElement>('dashboard-error').textContent = (e as Error).message
-    el('dashboard-error').classList.remove('hidden')
+    console.error('[Dashboard] Failed to load positions:', e)
+    el('dash-positions-list').innerHTML = '<div class="bot-no-signals" style="color:var(--sell)">Failed to load positions.</div>'
+  } finally {
+    el('dash-positions-loading').classList.add('hidden')
   }
 }
 
