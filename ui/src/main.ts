@@ -1231,10 +1231,17 @@ async function loadDashboard(): Promise<void> {
   el('dashboard-content').classList.add('hidden')
 
   try {
+    // Fire-and-forget: triggerMonitor() is a best-effort reconciliation pass (its own doc
+    // comment says as much) — it used to be awaited here, which meant the *entire* dashboard
+    // stayed hidden behind whatever a live cTrader sync happened to cost that tick (measured
+    // 10-16s in production). The positions fetch below already queries live truth directly,
+    // so nothing displayed here actually depends on this having finished first.
+    void triggerMonitor()
+
     // cachedAccounts (and the balance figure on it) is only ever written by loadAccounts() —
     // without this, the Dashboard's own "Refresh" button refreshed everything except the
     // account balance, which stayed frozen at whatever it was on initial page load.
-    await Promise.all([triggerMonitor(), loadAccounts()])
+    await loadAccounts()
     renderDashboardAccountTabs()
 
     // Scope to the selected Demo/Live type, and to a single account if drilled down —
@@ -1555,9 +1562,10 @@ function init(): void {
 
   loadAll()
   // Dashboard is now the default landing tab — load it up front rather than waiting for a
-  // tab click. Chain off loadAccounts() (already kicked off inside initAccounts()) so
-  // cachedAccounts is populated before the dashboard tries to read balances from it.
-  loadAccounts().then(loadDashboard)
+  // tab click. loadDashboard() already awaits loadAccounts() itself (see below) — chaining
+  // a second loadAccounts() call here just fired a redundant fetch a few milliseconds after
+  // the one initAccounts() already kicked off.
+  loadDashboard()
 }
 
 // ── Journal ────────────────────────────────────────────────────────────────
@@ -1580,7 +1588,11 @@ function initJournal(): void {
     errorEl.classList.add('hidden')
     statsBar.classList.add('hidden')
     try {
-      await triggerMonitor()
+      // Fire-and-forget — see the comment on triggerMonitor() itself. Journal reads from
+      // D1 either way; a trade that closed seconds ago just won't have its outcome recorded
+      // until this background pass finishes, same as before, but the page no longer waits
+      // 10-16s for a live cTrader sync before showing anything.
+      void triggerMonitor()
       const [entriesRes, statsRes] = await Promise.all([
         fetch('/api/v1/journal?limit=100'),
         fetch('/api/v1/journal/stats'),
