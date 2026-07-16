@@ -18,6 +18,7 @@ import type { CTraderAccount } from './account-types.ts';
 import { createMarketDataProvider } from '../providers/factory.ts';
 import type { CurrencyPair } from '../types/market.ts';
 import { getBotSignals } from '../bot/signal-store.ts';
+import { listBots } from '../bot/bot-types.ts';
 
 interface Env {
   DB:                    D1Database;
@@ -329,7 +330,7 @@ export function createCTraderRouter() {
         : await TradingService.connect(c.env);
       const positions = await svc.getPositions();
       const withPnl = await attachUnrealizedPnl(c.env, positions);
-      const pendingOrders = await getPendingOrders(c.env, positions);
+      const pendingOrders = await getPendingOrders(c.env, positions, accountId);
       return c.json({ positions: withPnl, count: withPnl.length, pendingOrders });
     } catch (e) {
       const msg = (e as Error).message;
@@ -450,12 +451,24 @@ async function connectAccount(env: Env, accountId: string): Promise<TradingServi
 // that against the live positions list to see which "executed" signals haven't filled yet.
 // Note: this won't show a pending limit order placed manually via the Trade tab — those aren't
 // tracked in bot_signals at all.
-async function getPendingOrders(env: Env, openPositions: Position[]) {
+//
+// Scoped to the requesting account's own bot(s) — bot_signals has no accountId column of its
+// own (a signal only knows its botId), so account scoping goes via which bot(s) are assigned
+// to this account. Without this, every account's view showed every other account's pending
+// signals too: a signal only gets excluded via openIds when its ctraderPositionId happens to
+// match a position actually open on the account being queried, which is never true for an
+// unrelated account, so an unscoped query left every account (including ones with no bot
+// assigned at all) displaying orders that were never placed on it.
+async function getPendingOrders(env: Env, openPositions: Position[], accountId?: string) {
   const openIds = new Set(openPositions.map(p => p.positionId));
   const now = Date.now();
+  const resolvedAccountId = accountId ?? 'default';
+  const bots    = await listBots(env.DB);
+  const botIds  = new Set(bots.filter(b => b.accountId === resolvedAccountId).map(b => b.id));
   const signals = await getBotSignals(env.DB, { status: 'executed', limit: 50 });
   return signals
     .filter(s =>
+      botIds.has(s.botId) &&
       s.ctraderPositionId !== null &&
       !openIds.has(s.ctraderPositionId) &&
       s.outcome === null &&
