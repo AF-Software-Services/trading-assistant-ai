@@ -8,8 +8,9 @@
 </head>
 <body>
   <div id="app">
-    <!-- Left sidebar -->
-    <aside id="sidebar">
+    <!-- Left sidebar — chart-only controls (pair/timeframe/overlays), hidden on every other
+         tab by initTabs() in main.ts. Starts hidden since Dashboard is the default landing tab. -->
+    <aside id="sidebar" class="hidden">
       <div id="pair-selector">
         <div class="section-label">PAIR</div>
         <div id="pair-buttons">

@@ -469,6 +469,11 @@ function initTabs(): void {
       const panel = document.getElementById(`tab-${btn.dataset.tab}`)!
       panel.classList.remove('hidden')
       panel.classList.add('active')
+      // Sidebar (desktop) and its mobile-topbar equivalent hold chart-only controls
+      // (pair/timeframe/overlays) — only relevant on the Chart tab itself.
+      const onChart = btn.dataset.tab === 'chart'
+      document.getElementById('sidebar')?.classList.toggle('hidden', !onChart)
+      document.getElementById('mobile-topbar')?.classList.toggle('hidden', !onChart)
       if (btn.dataset.tab === 'positions') loadPositions()
       if (btn.dataset.tab === 'history')   loadHistory()
       if (btn.dataset.tab === 'news')      loadNews(activePair)
