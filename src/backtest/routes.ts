@@ -43,6 +43,7 @@ export function createBacktestRouter() {
     // Trade-setup tuning — undefined fields fall back to DEFAULT_TRENDLINE_TUNABLES inside
     // detectTrendlineSignal, same as the live bot path in bot/engine.ts.
     const tunables = pickTrendlineTunables(botInstance.settings);
+    const tpMode = (botInstance.settings["tpMode"] === "atLevel" ? "atLevel" : "rr") as "rr" | "atLevel";
     const pairs          = body.pairs;
     const { fromMs, toMs } = body;
 
@@ -56,7 +57,7 @@ export function createBacktestRouter() {
     const runBacktest = async () => {
       try {
         const { signals, diagnostics, log } = await runTrendlineBacktest(
-          { pairs, fromMs, toMs, accountBalance, riskPercent, rewardRisk, minScore, maxOpenPositions, allowDuplicatePairs, swingLookback, tunables },
+          { pairs, fromMs, toMs, accountBalance, riskPercent, rewardRisk, minScore, maxOpenPositions, allowDuplicatePairs, swingLookback, tunables, tpMode },
           c.env.TWELVE_DATA_API_KEY,
           (msg) => console.log(`[backtest ${runId}] ${msg}`),
           c.env.KV,

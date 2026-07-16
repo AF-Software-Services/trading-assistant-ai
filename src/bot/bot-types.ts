@@ -32,6 +32,10 @@ export const BOT_TYPE_REGISTRY: BotTypeDefinition[] = [
       touchToleranceAtr:  0.3,
       minStopDistAtr:     0.2,
       swingLookback:      5,
+      // "rr" = fixed reward:risk multiple of the stop (previous/only behavior).
+      // "atLevel" = target the next opposing S/R zone instead, falling back to "rr"
+      // when no zone is found ahead or it wouldn't produce a sane R:R.
+      tpMode:             "rr",
     },
   },
 ];
