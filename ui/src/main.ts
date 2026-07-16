@@ -548,22 +548,8 @@ function updateTradeConnectionUI(): void {
 // There is no manual fallback — if no account balance is cached yet, sizing is 0
 // until the account is connected and its balance refreshed (Accounts tab).
 function syncAccountBalanceFromSelection(): void {
-  const acct    = cachedAccounts.find(a => a.id === selectedTradeAccountId)
-  const display = document.getElementById('risk-balance-display')
-  const hint    = document.getElementById('risk-balance-hint')
-
-  if (acct?.balance != null) {
-    accountBalance = acct.balance
-    if (display) display.textContent = `£${acct.balance.toFixed(2)}`
-    if (hint) {
-      hint.textContent = `From ${acct.name} — refresh in the Accounts tab`
-      hint.classList.remove('hidden')
-    }
-  } else {
-    accountBalance = 0
-    if (display) display.textContent = acct ? 'Not connected' : 'No account selected'
-    if (hint) hint.classList.add('hidden')
-  }
+  const acct = cachedAccounts.find(a => a.id === selectedTradeAccountId)
+  accountBalance = acct?.balance ?? 0
   updateRiskDisplay()
   updateBotRiskDisplay()
   updateTradeSizing()
@@ -1508,32 +1494,14 @@ async function loadHistory(): Promise<void> {
 }
 
 // ── Risk settings ─────────────────────────────────────────────────────────────
+// Updates the sidebar's "Risk: £X per trade" note (Chart tab only). The old top-bar "⚙ Risk"
+// button/dropdown that used to also show this was removed — it had no controls left (risk %
+// and R:R moved to per-bot settings long ago), duplicated the balance the Trade tab's own
+// sizing display and the Dashboard already show, and appeared on every tab regardless of
+// relevance.
 function updateRiskDisplay(): void {
-  const displayEl = document.getElementById('risk-amount-display')
-  const noteEl    = document.getElementById('risk-note-amount')
-  const fmt = `£${accountBalance.toFixed(2)}`
-  if (displayEl) displayEl.textContent = fmt
-  if (noteEl)    noteEl.textContent    = fmt
-}
-
-function initRiskSettings(): void {
-  const btn      = el<HTMLButtonElement>('risk-settings-btn')
-  const dropdown = el('risk-dropdown')
-
-  updateRiskDisplay()
-
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation()
-    const open = dropdown.classList.toggle('hidden') === false
-    btn.classList.toggle('active', open)
-  })
-
-  document.addEventListener('click', () => {
-    dropdown.classList.add('hidden')
-    btn.classList.remove('active')
-  })
-
-  dropdown.addEventListener('click', (e) => e.stopPropagation())
+  const noteEl = document.getElementById('risk-note-amount')
+  if (noteEl) noteEl.textContent = `£${accountBalance.toFixed(2)}`
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
@@ -1562,7 +1530,6 @@ function init(): void {
   }
   initDrawingTools()
   initOverlayToggles()
-  initRiskSettings()
   initNews()
   initCTrader()
   initExecuteModal()
