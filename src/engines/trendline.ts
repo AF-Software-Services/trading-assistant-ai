@@ -187,6 +187,19 @@ export function getDailyBias(dailyCandles: Candle[]): "bullish" | "bearish" | "n
   return "neutral";
 }
 
+// ── Trading session ───────────────────────────────────────────────────────────
+
+// A simpler 3-way, no-gap split than journal.ts's getSession() (which has separate overlap/
+// off-hours buckets for descriptive labeling) — a filtering decision needs every hour to map
+// to exactly one session, not "off_hours".
+export type TradingSession = "asian" | "london" | "ny";
+
+export function getTradingSession(hourUtc: number): TradingSession {
+  if (hourUtc >= 21 || hourUtc < 7) return "asian";
+  if (hourUtc >= 7  && hourUtc < 13) return "london";
+  return "ny";
+}
+
 // ── Build trendlines ──────────────────────────────────────────────────────────
 
 function buildLines(
@@ -294,6 +307,7 @@ function detectSetupForLine(
   dailyBias: "bullish" | "bearish" | "neutral",
   tunables:  TrendlineTunables,
   tpMode:    TpMode,
+  requireCandleConfirmation: boolean,
 ): TrendlineSignal | null {
   // Direction follows line type: resistance break → long, support break → short
   const breakDir: "buy" | "sell" = line.type === "resistance" ? "buy" : "sell";
@@ -342,6 +356,16 @@ function detectSetupForLine(
 
   if (retestIdx === -1) return null;
   if (retestIdx < total - tunables.retestRecencyBars) return null; // stale — retest not recent enough
+
+  // Optional extra confirmation: require the retest candle itself to be a bullish/bearish
+  // engulfing (or hammer/shooting star) in the break direction, not just a close on the
+  // right side of the line.
+  if (requireCandleConfirmation) {
+    const confirmed = breakDir === "buy"
+      ? isBullishEngulfing(candles, retestIdx)
+      : isBearishEngulfing(candles, retestIdx);
+    if (!confirmed) return null;
+  }
 
   // ── Trade levels ─────────────────────────────────────────────────────────────
   const retestCandle  = candles[retestIdx]!;
@@ -417,6 +441,7 @@ export function detectTrendlineSignal(
   dailyCandles?: Candle[],
   tunables:     Partial<TrendlineTunables> = {},
   tpMode:       TpMode = "rr",
+  requireCandleConfirmation = false,
 ): TrendlineSignal | null {
   if (candles.length < 50) return null;
 
@@ -438,12 +463,12 @@ export function detectTrendlineSignal(
   const signals: TrendlineSignal[] = [];
 
   for (const line of resistanceLines) {
-    const sig = detectSetupForLine(candles, line, atr, rrRatio, dailyBias, t, tpMode);
+    const sig = detectSetupForLine(candles, line, atr, rrRatio, dailyBias, t, tpMode, requireCandleConfirmation);
     if (sig) signals.push(sig);
   }
 
   for (const line of supportLines) {
-    const sig = detectSetupForLine(candles, line, atr, rrRatio, dailyBias, t, tpMode);
+    const sig = detectSetupForLine(candles, line, atr, rrRatio, dailyBias, t, tpMode, requireCandleConfirmation);
     if (sig) signals.push(sig);
   }
 

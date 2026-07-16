@@ -2,7 +2,8 @@ import { PHASE1_PAIRS }                    from "../types/market.ts";
 import type { CurrencyPair }               from "../types/market.ts";
 import type { BotInstance }                from "./bot-types.ts";
 import { createMarketDataProvider }        from "../providers/factory.ts";
-import { detectTrendlineSignal, pickTrendlineTunables } from "../engines/trendline.ts";
+import { detectTrendlineSignal, pickTrendlineTunables, getTradingSession } from "../engines/trendline.ts";
+import type { TradingSession }             from "../engines/trendline.ts";
 import { storeTrendlineTrailState }        from "./monitor.ts";
 import { TradingService }                  from "../trading/service.ts";
 import { getAccount, updateAccountBalance, getPrimaryAccountBalance } from "../ctrader/account-types.ts";
@@ -175,6 +176,12 @@ export async function runBotScan(env: {
   const tunables = env.botInstance ? pickTrendlineTunables(env.botInstance.settings) : {};
   const swingLookback = (env.botInstance?.settings["swingLookback"] as number | undefined) ?? 5;
   const tpMode = ((env.botInstance?.settings["tpMode"] as string | undefined) === "atLevel" ? "atLevel" : "rr") as "rr" | "atLevel";
+  const requireCandleConfirmation = env.botInstance?.settings["requireCandleConfirmation"] === true;
+  const allowedSessions: Record<TradingSession, boolean> = {
+    asian:  env.botInstance?.settings["allowAsianSession"]  !== false,
+    london: env.botInstance?.settings["allowLondonSession"] !== false,
+    ny:     env.botInstance?.settings["allowNySession"]     !== false,
+  };
 
   // Connect to the bot's assigned account; fall back to legacy global token
   const botAccount = env.botInstance?.accountId
@@ -252,10 +259,10 @@ export async function runBotScan(env: {
           provider.getCandles(pair, "4H", 200),
           provider.getCandles(pair, "D", 30),
         ]);
-        const tlSig = detectTrendlineSignal(candles4H, rrRatio, swingLookback, candlesD, tunables, tpMode);
+        const tlSig = detectTrendlineSignal(candles4H, rrRatio, swingLookback, candlesD, tunables, tpMode, requireCandleConfirmation);
 
         if (!tlSig) {
-          const tlNoBias = detectTrendlineSignal(candles4H, rrRatio, swingLookback, undefined, tunables, tpMode);
+          const tlNoBias = detectTrendlineSignal(candles4H, rrRatio, swingLookback, undefined, tunables, tpMode, requireCandleConfirmation);
           if (tlNoBias) {
             await saveBotSignal(env.DB, {
               id: crypto.randomUUID(), botId, pair,
@@ -290,6 +297,9 @@ export async function runBotScan(env: {
           continue;
         }
         if (tlSig.score < minConfidenceScore) continue;
+
+        const retestHourUtc = new Date(candles4H[tlSig.retestIndex]!.timestamp).getUTCHours();
+        if (!allowedSessions[getTradingSession(retestHourUtc)]) continue;
 
         result.signalsFound++;
 

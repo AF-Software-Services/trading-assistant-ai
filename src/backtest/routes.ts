@@ -44,6 +44,12 @@ export function createBacktestRouter() {
     // detectTrendlineSignal, same as the live bot path in bot/engine.ts.
     const tunables = pickTrendlineTunables(botInstance.settings);
     const tpMode = (botInstance.settings["tpMode"] === "atLevel" ? "atLevel" : "rr") as "rr" | "atLevel";
+    const requireCandleConfirmation = botInstance.settings["requireCandleConfirmation"] === true;
+    const allowedSessions = {
+      asian:  botInstance.settings["allowAsianSession"]  !== false,
+      london: botInstance.settings["allowLondonSession"] !== false,
+      ny:     botInstance.settings["allowNySession"]     !== false,
+    };
     const pairs          = body.pairs;
     const { fromMs, toMs } = body;
 
@@ -57,7 +63,7 @@ export function createBacktestRouter() {
     const runBacktest = async () => {
       try {
         const { signals, diagnostics, log } = await runTrendlineBacktest(
-          { pairs, fromMs, toMs, accountBalance, riskPercent, rewardRisk, minScore, maxOpenPositions, allowDuplicatePairs, swingLookback, tunables, tpMode },
+          { pairs, fromMs, toMs, accountBalance, riskPercent, rewardRisk, minScore, maxOpenPositions, allowDuplicatePairs, swingLookback, tunables, tpMode, requireCandleConfirmation, allowedSessions },
           c.env.TWELVE_DATA_API_KEY,
           (msg) => console.log(`[backtest ${runId}] ${msg}`),
           c.env.KV,
