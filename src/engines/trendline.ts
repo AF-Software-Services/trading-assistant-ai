@@ -18,6 +18,16 @@ import { detectZones, getNearestZone } from "./support-resistance.ts";
 
 export type TpMode = "rr" | "atLevel";
 
+// cTrader quotes JPY pairs to 3 decimal places and everything else to 5 (same convention
+// already used for display elsewhere, e.g. ui/src/main.ts's `symbol.includes('JPY') ? 3 : 5`).
+// Rounding every pair to 5 decimals here used to silently produce unplaceable JPY orders —
+// the broker rejects them outright ("more digits than symbol allows"), discarding an
+// otherwise-valid signal with no retry, not just losing a bit of precision.
+export function roundPrice(price: number, pair: string): number {
+  const factor = pair.includes("JPY") ? 1000 : 100000;
+  return Math.round(price * factor) / factor;
+}
+
 export interface DetectedLine {
   type:    "resistance" | "support";
   p1Index: number;
@@ -408,12 +418,13 @@ function detectSetupForLine(
   const lineLabel    = line.type === "resistance" ? "Descending resistance" : "Ascending support";
   const projAtBreak  = projectPrice(line, breakIdx);
   const projAtRetest = projectPrice(line, retestIdx);
+  const pair         = candles[0]!.pair;
 
   return {
     direction:     breakDir,
-    entryPrice:    Math.round(entryPrice * 100000) / 100000,
-    stopLoss:      Math.round(stopLoss   * 100000) / 100000,
-    takeProfit:    Math.round(takeProfit * 100000) / 100000,
+    entryPrice:    roundPrice(entryPrice, pair),
+    stopLoss:      roundPrice(stopLoss, pair),
+    takeProfit:    roundPrice(takeProfit, pair),
     score,
     reasons: [
       `${lineLabel} trendline break: close ${breakDir === "buy" ? "above" : "below"} ${projAtBreak.toFixed(5)} (${line.touches} touches)`,
@@ -425,7 +436,7 @@ function detectSetupForLine(
     safetyLine:    line,  // same line used for SL projection (slope trails the trendline)
     breakIndex:    breakIdx,
     retestIndex:   retestIdx,
-    safetyAtEntry: Math.round(lineAtRetest * 100000) / 100000,
+    safetyAtEntry: roundPrice(lineAtRetest, pair),
   };
 }
 

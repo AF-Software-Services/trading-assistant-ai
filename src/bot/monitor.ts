@@ -15,6 +15,7 @@ import { getAccount }                      from "../ctrader/account-types.ts";
 import { updateJournalOutcome, deleteJournalEntry } from "../storage/journal.ts";
 import { createMarketDataProvider }        from "../providers/factory.ts";
 import { calculateATR }                    from "../engines/trend.ts";
+import { roundPrice }                      from "../engines/trendline.ts";
 
 interface Env {
   DB: D1Database;
@@ -190,9 +191,9 @@ async function monitorAccountSignals(
     // applied relative to the real fill price instead of the stale intended entry.
     if (position.stopLoss == null) {
       const riskDistance = Math.abs(signal.entryPrice - signal.stopLoss);
-      const newSL = signal.direction === "buy"
+      const newSL = roundPrice(signal.direction === "buy"
         ? position.openPrice - riskDistance
-        : position.openPrice + riskDistance;
+        : position.openPrice + riskDistance, signal.pair);
       try {
         await trading.amendPosition(posId, newSL, position.takeProfit ?? signal.takeProfit ?? undefined);
         console.log(`[Monitor] ${signal.pair} ${signal.direction} had no stop loss — applied ${newSL.toFixed(5)} (real entry ${position.openPrice}, intended risk ${riskDistance.toFixed(5)})`);
@@ -217,7 +218,7 @@ async function monitorAccountSignals(
 
       if (state.safetySlope !== undefined && state.safetyAnchorPrice !== undefined && state.safetyAnchorTimeMs !== undefined) {
         const barsElapsed = (Date.now() - state.safetyAnchorTimeMs) / FOUR_HOURS_MS;
-        newSL = state.safetyAnchorPrice + state.safetySlope * barsElapsed;
+        newSL = roundPrice(state.safetyAnchorPrice + state.safetySlope * barsElapsed, signal.pair);
       }
 
       // SL only moves in trade's favour
