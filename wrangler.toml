@@ -26,4 +26,4 @@ directory = "./dist/ui"
 
 [vars]
 ENVIRONMENT = "production"
-MARKET_DATA_PROVIDER = "live"
+MARKET_DATA_PROVIDER = "ctrader"

@@ -28,7 +28,6 @@ interface Env {
   CTRADER_CLIENT_SECRET: string;
   CTRADER_ACCOUNT_ID:    string;
   MARKET_DATA_PROVIDER?: string;
-  TWELVE_DATA_API_KEY?:  string;
 }
 
 const REDIRECT_URI = 'https://trading-assistant-ai.andrew-dobson.workers.dev/auth/callback';
@@ -345,7 +344,7 @@ export function createCTraderRouter() {
         ? await connectAccount(c.env, accountId)
         : await TradingService.connect(c.env);
       const positions = await svc.getPositions();
-      const withPnl = await attachUnrealizedPnl(c.env, positions);
+      const withPnl = await attachUnrealizedPnl(c.env, positions, svc);
       const pendingOrders = await getPendingOrders(c.env, positions, accountId);
       return c.json({ positions: withPnl, count: withPnl.length, pendingOrders });
     } catch (e) {
@@ -448,6 +447,7 @@ export function createCTraderRouter() {
     }
   });
 
+
   return app;
 }
 
@@ -510,9 +510,8 @@ async function getPendingOrders(env: Env, openPositions: Position[], accountId?:
 // quote currency (no lot-size guessing — volume comes straight from the broker); the only
 // approximation is converting that into GBP for non-GBP-quoted pairs, using GBP/USD and
 // GBP/CAD (both already tracked pairs) as conversion anchors.
-async function attachUnrealizedPnl(env: Env, positions: Position[]): Promise<Position[]> {
+async function attachUnrealizedPnl(env: Env, positions: Position[], svc: TradingService): Promise<Position[]> {
   if (positions.length === 0) return positions;
-  if (!env.TWELVE_DATA_API_KEY) return positions;
 
   const pairs = new Set(positions.map(p => p.symbol));
   // Conversion anchors, only fetched if a position actually needs them.
@@ -521,9 +520,8 @@ async function attachUnrealizedPnl(env: Env, positions: Position[]): Promise<Pos
   if (positions.some(p => quoteCurrency(p.symbol) === 'JPY')) { pairs.add('GBP/USD'); pairs.add('USD/JPY'); }
 
   const provider = createMarketDataProvider({
-    provider: env.MARKET_DATA_PROVIDER ?? 'live',
-    apiKey:   env.TWELVE_DATA_API_KEY,
-    kv:       env.KV,
+    provider: env.MARKET_DATA_PROVIDER ?? 'ctrader',
+    trading:  svc,
   });
 
   const prices = new Map<string, number>();

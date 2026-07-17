@@ -11,7 +11,6 @@ interface Env {
   KV: KVNamespace;
   ENVIRONMENT: string;
   MARKET_DATA_PROVIDER: string;
-  TWELVE_DATA_API_KEY?: string;
   CTRADER_CLIENT_ID: string;
   CTRADER_CLIENT_SECRET: string;
   CTRADER_ACCOUNT_ID: string;
@@ -73,7 +72,6 @@ export async function handleCronTrigger(
               DB:                    env.DB,
               KV:                    env.KV,
               MARKET_DATA_PROVIDER:  env.MARKET_DATA_PROVIDER,
-              TWELVE_DATA_API_KEY:   env.TWELVE_DATA_API_KEY,
               CTRADER_CLIENT_ID:     env.CTRADER_CLIENT_ID,
               CTRADER_CLIENT_SECRET: env.CTRADER_CLIENT_SECRET,
               CTRADER_ACCOUNT_ID:    env.CTRADER_ACCOUNT_ID,
@@ -99,7 +97,6 @@ export async function handleCronTrigger(
             CTRADER_CLIENT_SECRET: env.CTRADER_CLIENT_SECRET,
             CTRADER_ACCOUNT_ID:    env.CTRADER_ACCOUNT_ID,
             MARKET_DATA_PROVIDER:  env.MARKET_DATA_PROVIDER,
-            TWELVE_DATA_API_KEY:   env.TWELVE_DATA_API_KEY,
           });
         } catch (err) {
           console.error("[Cron] Position monitor error:", err);

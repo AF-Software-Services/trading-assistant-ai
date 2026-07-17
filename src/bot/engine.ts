@@ -114,7 +114,6 @@ export async function runBotScan(env: {
   DB: D1Database;
   KV: KVNamespace;
   MARKET_DATA_PROVIDER: string;
-  TWELVE_DATA_API_KEY?: string;
   CTRADER_CLIENT_ID: string;
   CTRADER_CLIENT_SECRET: string;
   CTRADER_ACCOUNT_ID: string;
@@ -220,6 +219,11 @@ export async function runBotScan(env: {
   } else if (mode === "autonomous") {
     result.errors.push("cTrader not connected — cannot execute autonomously");
     return result;
+  } else {
+    // Candle data itself now comes from cTrader too, so scanning is impossible without a
+    // connection even in approval mode (previously an independent data vendor made this work).
+    result.errors.push("cTrader not connected — cannot fetch candle data to scan");
+    return result;
   }
 
   const riskAmount = accountBalance * riskPercent / 100;
@@ -238,8 +242,7 @@ export async function runBotScan(env: {
 
   const provider = createMarketDataProvider({
     provider: env.MARKET_DATA_PROVIDER,
-    apiKey:   env.TWELVE_DATA_API_KEY || undefined,
-    kv:       env.KV,
+    trading,
   });
 
   const targetPairs = targetPairsOverride ?? (PHASE1_PAIRS as CurrencyPair[]);

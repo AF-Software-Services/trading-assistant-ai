@@ -2,16 +2,27 @@ import type { MarketDataProvider } from "./interface.ts";
 import type { CurrencyPair, Timeframe, Candle, PriceTick } from "../types/market.ts";
 
 const BASE_PRICES: Record<CurrencyPair, number> = {
-  "EUR/USD": 1.0850,
-  "GBP/USD": 1.2650,
-  "GBP/CAD": 1.7200,
-  "USD/JPY": 149.50,
-  "EUR/GBP": 0.8580,
-  "AUD/USD": 0.6520,
+  "EUR/USD":   1.0850,
+  "GBP/USD":   1.2650,
+  "GBP/CAD":   1.7200,
+  "USD/JPY":   149.50,
+  "EUR/GBP":   0.8580,
+  "AUD/USD":   0.6520,
+  "US500":     6300,
+  "NAS100":    23000,
+  "GER40":     24000,
+  "UK100":     8900,
+  "XAU/USD":   3990,
+  "XAG/USD":   56,
+  "WTI/USD":   79,
+  "BRENT/USD": 84,
+  "NATGAS":    3.5,
+  "COPPER":    4.6,
 };
 
 const TIMEFRAME_MS: Record<Timeframe, number> = {
   "1H": 3_600_000,
+  "2H": 7_200_000,
   "4H": 14_400_000,
   "D":  86_400_000,
   "W":  604_800_000,
@@ -20,6 +31,7 @@ const TIMEFRAME_MS: Record<Timeframe, number> = {
 // Typical volatility (as fraction of price) per timeframe
 const TIMEFRAME_VOLATILITY: Record<Timeframe, number> = {
   "1H": 0.0008,
+  "2H": 0.0011,
   "4H": 0.0015,
   "D":  0.0035,
   "W":  0.0080,

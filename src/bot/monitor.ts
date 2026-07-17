@@ -24,7 +24,6 @@ interface Env {
   CTRADER_CLIENT_SECRET: string;
   CTRADER_ACCOUNT_ID: string;
   MARKET_DATA_PROVIDER?: string;
-  TWELVE_DATA_API_KEY?: string;
 }
 
 interface TrailState {
@@ -49,12 +48,6 @@ export async function monitorPositions(env: Env): Promise<void> {
   const openSignals     = executedSignals.filter(s => s.ctraderPositionId !== null);
   if (openSignals.length === 0) return;
 
-  const provider = createMarketDataProvider({
-    provider: env.MARKET_DATA_PROVIDER ?? "live",
-    apiKey:   env.TWELVE_DATA_API_KEY,
-    kv:       env.KV,
-  });
-
   // Group by the account each signal's bot is actually assigned to — a single shared
   // connection here (as this used to be, always the legacy "default" account) meant every
   // other account's positions/history/cancel checks ran against the wrong account entirely,
@@ -77,6 +70,12 @@ export async function monitorPositions(env: Env): Promise<void> {
           return account ? await TradingService.tryConnectToAccount(env, account) : null;
         })();
     if (!trading) continue;
+    // Trendbars ride on this same account's cTrader connection — a per-account provider
+    // keeps candle fetching consistent with whichever account's positions are being trailed.
+    const provider = createMarketDataProvider({
+      provider: env.MARKET_DATA_PROVIDER ?? "ctrader",
+      trading,
+    });
     await monitorAccountSignals(env, trading, signals, provider);
   }
 }

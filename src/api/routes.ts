@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import type { CurrencyPair, Timeframe } from "../types/market.ts";
-import { PHASE1_PAIRS } from "../types/market.ts";
+import { PHASE1_PAIRS, ALL_TRADEABLE_PAIRS } from "../types/market.ts";
 import { createMarketDataProvider } from "../providers/factory.ts";
+import { TradingService } from "../trading/service.ts";
 import { analyseMarketStructure } from "../engines/market-structure.ts";
 import { detectZones, getZoneAlerts } from "../engines/support-resistance.ts";
 import { detectAllSignals } from "../engines/candlestick.ts";
@@ -24,7 +25,15 @@ interface Env {
   KV: KVNamespace;
   ENVIRONMENT: string;
   MARKET_DATA_PROVIDER: string;
-  TWELVE_DATA_API_KEY: string;
+  CTRADER_CLIENT_ID: string;
+  CTRADER_CLIENT_SECRET: string;
+  CTRADER_ACCOUNT_ID: string;
+}
+
+async function connectDefaultTrading(env: Env): Promise<TradingService> {
+  const trading = await TradingService.tryConnect(env);
+  if (!trading) throw new Error("cTrader not connected");
+  return trading;
 }
 
 export function createApiRouter(): Hono<{ Bindings: Env }> {
@@ -32,28 +41,34 @@ export function createApiRouter(): Hono<{ Bindings: Env }> {
 
   // GET /api/v1/pairs
   app.get("/pairs", (c) => {
-    return c.json({ pairs: PHASE1_PAIRS });
+    return c.json({ pairs: ALL_TRADEABLE_PAIRS });
   });
 
   // GET /api/v1/trendlines/:pair
   app.get("/trendlines/:pair", async (c) => {
     const pair = c.req.param("pair") as CurrencyPair;
-    if (!PHASE1_PAIRS.includes(pair)) return c.json({ error: "Unknown pair" }, 400);
+    if (!ALL_TRADEABLE_PAIRS.includes(pair)) return c.json({ error: "Unknown pair" }, 400);
     const tf: Timeframe = (c.req.query("timeframe") as Timeframe | undefined) ?? "4H";
-    const provider = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER, apiKey: c.env.TWELVE_DATA_API_KEY || undefined, kv: c.env.KV });
-    const [candles, dailyCandles] = await Promise.all([
-      provider.getCandles(pair, tf, 200),
-      provider.getCandles(pair, "D", 100),
-    ]);
-    const result = detectTrendlineOverlays(candles, dailyCandles);
-    return c.json({ pair, timeframe: tf, ...result });
+    try {
+      const trading  = await connectDefaultTrading(c.env);
+      const provider = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER, trading });
+      const [candles, dailyCandles] = await Promise.all([
+        provider.getCandles(pair, tf, 200),
+        provider.getCandles(pair, "D", 100),
+      ]);
+      const result = detectTrendlineOverlays(candles, dailyCandles);
+      return c.json({ pair, timeframe: tf, ...result });
+    } catch (e) {
+      return c.json({ error: (e as Error).message }, 502);
+    }
   });
 
   // ── GET /api/v1/price/:pair ──────────────────────────────────────────────────
   app.get("/price/:pair", async (c) => {
     const pair = decodeURIComponent(c.req.param("pair")) as CurrencyPair;
     try {
-      const p    = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER, apiKey: c.env.TWELVE_DATA_API_KEY || undefined, kv: c.env.KV });
+      const trading = await connectDefaultTrading(c.env);
+      const p    = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER, trading });
       const tick = await p.getLatestPrice(pair);
       return c.json({ pair, mid: tick.mid, bid: tick.bid, ask: tick.ask });
     } catch (e) {
@@ -62,15 +77,11 @@ export function createApiRouter(): Hono<{ Bindings: Env }> {
   });
 
   // ── GET /api/v1/candles/:pair ────────────────────────────────────────────────
-  // Proxies Twelve Data, caches in KV for 5 minutes.
+  // Sources candles from Pepperstone via cTrader trendbars, caches in KV for 5 minutes.
   app.get("/candles/:pair", async (c) => {
-    const pair      = decodeURIComponent(c.req.param("pair"));
-    const timeframe = (c.req.query("timeframe") ?? "1H") as string;
+    const pair      = decodeURIComponent(c.req.param("pair")) as CurrencyPair;
+    const timeframe = ((c.req.query("timeframe") ?? "1H") as Timeframe);
     const count     = parseInt(c.req.query("count") ?? "200", 10);
-
-    // Timeframe mapping
-    const tfMap: Record<string, string> = { "1H": "1h", "4H": "4h", "D": "1day", "W": "1week" };
-    const interval = tfMap[timeframe] ?? "1h";
 
     const cacheKey = `candles:${pair}:${timeframe}`;
 
@@ -78,52 +89,37 @@ export function createApiRouter(): Hono<{ Bindings: Env }> {
     const cached = await c.env.KV.get(cacheKey, "json") as { candles: unknown[] } | null;
     if (cached) return c.json(cached);
 
-    const apiKey = c.env.TWELVE_DATA_API_KEY;
-    if (!apiKey) {
-      return c.json({ error: "TWELVE_DATA_API_KEY not configured" }, 503);
+    try {
+      const trading  = await connectDefaultTrading(c.env);
+      const provider = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER, trading });
+      const candles  = await provider.getCandles(pair, timeframe, count);
+
+      const result = { pair, timeframe, candles };
+      // Cache for 5 minutes
+      await c.env.KV.put(cacheKey, JSON.stringify(result), { expirationTtl: 300 });
+      return c.json(result);
+    } catch (e) {
+      return c.json({ error: `Candle fetch failed for ${pair}: ${(e as Error).message}` }, 502);
     }
-
-    const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(pair)}&interval=${interval}&outputsize=${count}&apikey=${apiKey}&format=JSON`;
-    const resp = await fetch(url);
-    if (!resp.ok) return c.json({ error: `Twelve Data HTTP ${resp.status} for ${pair}` }, 502);
-
-    const raw = await resp.json() as {
-      status?: string;
-      code?: number;
-      message?: string;
-      values?: Array<{ datetime: string; open: string; high: string; low: string; close: string }>;
-    };
-    if (raw.status === "error" || raw.code) {
-      return c.json({ error: `Twelve Data: ${raw.message ?? "unknown error"} (pair=${pair}, code=${raw.code})` }, 502);
-    }
-
-    const values = raw.values ?? [];
-    // Twelve Data returns newest first — reverse to oldest-first
-    const candles = values.slice().reverse().map(v => ({
-      timestamp: new Date(v.datetime.includes("T") ? v.datetime : v.datetime + "Z").getTime(),
-      open:  parseFloat(v.open),
-      high:  parseFloat(v.high),
-      low:   parseFloat(v.low),
-      close: parseFloat(v.close),
-    }));
-
-    const result = { pair, timeframe, candles };
-    // Cache for 5 minutes
-    await c.env.KV.put(cacheKey, JSON.stringify(result), { expirationTtl: 300 });
-    return c.json(result);
   });
 
   // ── GET /api/v1/analysis/:pair ───────────────────────────────────────────────
   // Run all engines on 1H data, return trend/zones/signals/scores.
   app.get("/analysis/:pair", async (c) => {
     const pair = decodeURIComponent(c.req.param("pair")) as CurrencyPair;
-    if (!PHASE1_PAIRS.includes(pair)) return c.json({ error: "Unknown pair" }, 400);
+    if (!ALL_TRADEABLE_PAIRS.includes(pair)) return c.json({ error: "Unknown pair" }, 400);
 
     const tf = (c.req.query("timeframe") as Timeframe | undefined) ?? "4H";
     const accountBalance = c.req.query("accountBalance") ? parseFloat(c.req.query("accountBalance")!) : undefined;
     const riskPercent    = c.req.query("riskPercent")    ? parseFloat(c.req.query("riskPercent")!)    : undefined;
     const maxRisk        = accountBalance && riskPercent ? accountBalance * (riskPercent / 100) : undefined;
-    const provider  = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER, apiKey: c.env.TWELVE_DATA_API_KEY || undefined, kv: c.env.KV });
+    let provider;
+    try {
+      const trading = await connectDefaultTrading(c.env);
+      provider = createMarketDataProvider({ provider: c.env.MARKET_DATA_PROVIDER, trading });
+    } catch (e) {
+      return c.json({ error: (e as Error).message }, 502);
+    }
 
     // Helper: read from the candles route's KV cache, falling back to Twelve Data.
     // This avoids double-billing the rate limit when the chart already fetched candles.
