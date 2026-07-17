@@ -53,15 +53,14 @@ function showAnalysisLoading(show: boolean): void {
 
 // ── Pair / TF buttons ─────────────────────────────────────────────────────────
 function initPairButtons(): void {
-  document.querySelectorAll<HTMLButtonElement>('.pair-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.pair-btn').forEach(b => b.classList.remove('active'))
-      btn.classList.add('active')
-      activePair = btn.dataset.pair!
-      tradePanel.setPair(activePair)
-      chart.setPair(activePair)
-      loadAll()
-    })
+  const select = el<HTMLSelectElement>('pair-select')
+  select.addEventListener('change', () => {
+    activePair = select.value
+    const pairDisp = document.getElementById('mobile-pair-display')
+    if (pairDisp) pairDisp.textContent = activePair
+    tradePanel.setPair(activePair)
+    chart.setPair(activePair)
+    loadAll()
   })
 }
 
@@ -97,7 +96,6 @@ function initMobile(): void {
   const sidebar  = document.getElementById('sidebar')!
   const overlay  = document.getElementById('sidebar-overlay')!
   const menuBtn  = document.getElementById('mobile-menu-btn')
-  const pairDisp = document.getElementById('mobile-pair-display')
 
   function openSidebar(): void {
     sidebar.classList.add('open')
@@ -112,12 +110,7 @@ function initMobile(): void {
   overlay.addEventListener('click', closeSidebar)
 
   // Close sidebar when a pair is selected (mobile UX)
-  document.querySelectorAll<HTMLButtonElement>('.pair-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      if (pairDisp) pairDisp.textContent = btn.dataset.pair ?? ''
-      closeSidebar()
-    })
-  })
+  document.getElementById('pair-select')?.addEventListener('change', closeSidebar)
 
   // Mobile TF buttons mirror sidebar TF buttons
   document.querySelectorAll<HTMLButtonElement>('.mobile-tf-btn').forEach(btn => {
@@ -140,10 +133,9 @@ function applyUrlParams(): void {
   const tf   = params.get('timeframe')
 
   if (pair) {
-    const btn = document.querySelector<HTMLButtonElement>(`.pair-btn[data-pair="${pair}"]`)
-    if (btn) {
-      document.querySelectorAll('.pair-btn').forEach(b => b.classList.remove('active'))
-      btn.classList.add('active')
+    const select = el<HTMLSelectElement>('pair-select')
+    if (Array.from(select.options).some(o => o.value === pair)) {
+      select.value = pair
       activePair = pair
     }
   }
@@ -2050,7 +2042,12 @@ function updateBotRiskDisplay(): void {
   })
 }
 
-const ALL_PAIRS = ['EUR/USD','GBP/USD','GBP/CAD','USD/JPY','EUR/GBP','AUD/USD']
+const PAIR_CATEGORIES: Record<string, string[]> = {
+  Forex:       ['EUR/USD', 'GBP/USD', 'GBP/CAD', 'USD/JPY', 'EUR/GBP', 'AUD/USD'],
+  Indices:     ['US500', 'NAS100', 'GER40', 'UK100'],
+  Commodities: ['XAU/USD', 'XAG/USD', 'WTI/USD', 'BRENT/USD', 'NATGAS', 'COPPER'],
+}
+const ALL_PAIRS = Object.values(PAIR_CATEGORIES).flat()
 
 let botStatusIntervalId: ReturnType<typeof setInterval> | null = null
 
@@ -2090,6 +2087,16 @@ function initBot(): void {
   })
   document.addEventListener('click', () => typeOptions.classList.add('hidden'))
 
+  // Per-category "select all" in the Add Bot pair checklist
+  document.querySelectorAll<HTMLInputElement>('.bot-new-pair-select-all').forEach(selectAll => {
+    selectAll.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const category = selectAll.dataset.category
+      document.querySelectorAll<HTMLInputElement>(`.bot-new-pair[data-category="${category}"]`)
+        .forEach(c => { c.checked = selectAll.checked })
+    })
+  })
+
   confirmModalBtn.addEventListener('click', async () => {
     const type  = modalTypeEl.value
     const name  = modalNameEl.value.trim() || undefined
@@ -2107,7 +2114,7 @@ function initBot(): void {
       if (!res.ok) throw new Error(await res.text())
       modal.classList.add('hidden')
       modalNameEl.value = ''
-      document.querySelectorAll<HTMLInputElement>('.bot-new-pair').forEach(c => c.checked = false)
+      document.querySelectorAll<HTMLInputElement>('.bot-new-pair, .bot-new-pair-select-all').forEach(c => c.checked = false)
       await loadBotStatus()
     } catch (e: any) {
       alert(`Failed: ${e.message}`)
@@ -2119,9 +2126,18 @@ function initBot(): void {
   // ── Render bot cards ───────────────────────────────────────────────────────
   function renderBotCard(bot: any): string {
     const typeClass = bot.type === 'trendline' ? 'trendline' : ''
-    const pairPills = ALL_PAIRS.map(p => {
-      const active = bot.pairs.length === 0 || bot.pairs.includes(p)
-      return `<span class="bot-pair-pill ${active ? 'active' : ''}" data-pair="${p}" data-bot-id="${bot.id}">${p}</span>`
+    const pairPills = Object.entries(PAIR_CATEGORIES).map(([category, pairs]) => {
+      const pills = pairs.map(p => {
+        const active = bot.pairs.length === 0 || bot.pairs.includes(p)
+        return `<span class="bot-pair-pill ${active ? 'active' : ''}" data-pair="${p}" data-bot-id="${bot.id}">${p}</span>`
+      }).join('')
+      return `<div class="pair-category-group">
+        <div class="pair-category-header">
+          <span>${category}</span>
+          <button type="button" class="pair-category-select-all" data-category="${category}" data-bot-id="${bot.id}">Select all</button>
+        </div>
+        <div class="bot-card-pairs">${pills}</div>
+      </div>`
     }).join('')
 
     const riskFields = `
@@ -2319,9 +2335,9 @@ function initBot(): void {
               <button class="bot-card-mode-btn ${bot.mode==='autonomous'?'active':''}" data-mode="autonomous" data-bot-id="${bot.id}">Autonomous</button>
             </div>
           </div>
-          <div class="bot-card-row">
+          <div class="bot-card-row bot-card-row-pairs">
             <span class="bot-card-label">Pairs</span>
-            <div class="bot-card-pairs">${pairPills}</div>
+            <div class="bot-card-pairs-wrap">${pairPills}</div>
           </div>
           ${settingFields}
           ${acctSelector}
@@ -2373,6 +2389,17 @@ function initBot(): void {
       pill.addEventListener('click', (e) => {
         e.stopPropagation()
         pill.classList.toggle('active')
+      })
+    })
+
+    // Per-category "select all" — toggles every pill in that category between all-active/all-inactive
+    card.querySelectorAll<HTMLButtonElement>('.pair-category-select-all').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        const group = btn.closest('.pair-category-group')
+        const pills = group?.querySelectorAll<HTMLElement>('.bot-pair-pill') ?? []
+        const allActive = Array.from(pills).every(p => p.classList.contains('active'))
+        pills.forEach(p => p.classList.toggle('active', !allActive))
       })
     })
 

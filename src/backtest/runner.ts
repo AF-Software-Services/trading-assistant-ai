@@ -4,6 +4,7 @@ import { calcLots } from "../bot/engine.ts";
 import type { BotSignal } from "../bot/engine.ts";
 import { detectTrendlineSignal, getTradingSession } from "../engines/trendline.ts";
 import type { TrendlineTunables, TpMode, TradingSession } from "../engines/trendline.ts";
+import type { TradingService } from "../trading/service.ts";
 
 // Approximate GBP pip value per standard lot
 const PIP_VALUE_GBP: Record<string, number> = {
@@ -37,88 +38,61 @@ export interface BacktestConfig {
   allowedSessions:      Record<TradingSession, boolean>;
 }
 
-interface TwelveDataCandle {
-  datetime: string;
-  open: string;
-  high: string;
-  low: string;
-  close: string;
-}
+// ProtoOATrendbarPeriod values for the timeframes the backtester/prefetch route need.
+const CTRADER_PERIOD: Record<"4H" | "D" | "W", number> = { "4H": 10, "D": 12, "W": 13 };
 
-function toMs(datetime: string): number {
-  // "2024-01-15 04:00:00" or "2024-01-15"
-  return new Date(datetime.replace(" ", "T") + (datetime.includes(":") ? "Z" : "T00:00:00Z")).getTime();
-}
+// 14000 is cTrader's hard per-request cap — for 4H/D1/W1 that's years of history, always
+// more than enough to cover a backtest window plus its lookback padding in one request.
+const MAX_TRENDBARS = 14000;
 
-function convertCandles(raw: TwelveDataCandle[], pair: string, tf: Timeframe): Candle[] {
-  return raw
-    .map(c => ({
-      timestamp: toMs(c.datetime),
-      open:  parseFloat(c.open),
-      high:  parseFloat(c.high),
-      low:   parseFloat(c.low),
-      close: parseFloat(c.close),
-      timeframe: tf,
-      pair: pair as CurrencyPair,
-    }))
-    .sort((a, b) => a.timestamp - b.timestamp); // oldest first
-}
-
-async function fetchCandlesFromAPI(
+async function fetchCandlesFromCTrader(
   pair: string,
-  interval: string,
-  startDate: string,
-  endDate: string,
-  apiKey: string,
+  timeframe: "4H" | "D" | "W",
+  toMs: number,
+  trading: TradingService,
 ): Promise<Candle[]> {
-  // Retry up to 3 times on 429, with a short backoff — just a safety net now that
-  // the account has real per-minute headroom; no preventive pacing delays needed.
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(pair)}&interval=${interval}&start_date=${startDate}&end_date=${endDate}&outputsize=5000&apikey=${apiKey}`;
-    const res = await fetch(url);
-    if (res.status === 429) {
-      if (attempt < 2) { await delay(5000); continue; }
-      throw new Error(`Twelve Data HTTP 429 for ${pair} ${interval} (rate limited after retries)`);
-    }
-    if (!res.ok) throw new Error(`Twelve Data HTTP ${res.status} for ${pair} ${interval}`);
-    const data = await res.json() as { values?: TwelveDataCandle[]; code?: number; message?: string };
-    if (!data.values || data.values.length === 0) {
-      if (data.message) throw new Error(`Twelve Data error: ${data.message}`);
-      return [];
-    }
-    const tf = interval === "1day" ? "D" : interval === "1week" ? "W" : interval === "4h" ? "4H" : "1H";
-    return convertCandles(data.values, pair, tf as Timeframe);
-  }
-  return [];
+  const symbolId = await trading.resolveSymbolId(pair);
+  const bars = await trading.getTrendbars(symbolId, CTRADER_PERIOD[timeframe], MAX_TRENDBARS, toMs);
+  return bars.map(b => ({
+    timestamp: b.timestamp,
+    open:  b.open,
+    high:  b.high,
+    low:   b.low,
+    close: b.close,
+    timeframe: timeframe as Timeframe,
+    pair: pair as CurrencyPair,
+  }));
 }
 
-async function fetchCandles(
+// Cache key excludes date range — one cache entry covers all backtest periods, refreshed
+// daily. "_v3" because this is a different data source/shape than the old Twelve Data
+// cache — reusing the old key would silently mix candle shapes from two different feeds.
+export function trendbarCacheKey(pair: string, timeframe: "4H" | "D" | "W"): string {
+  return `candles_v3:${pair}:${timeframe}`;
+}
+
+export async function fetchCandles(
   pair: string,
-  interval: string,
-  startDate: string,
-  endDate: string,
-  apiKey: string,
+  timeframe: "4H" | "D" | "W",
+  toMs: number,
+  trading: TradingService,
   kv?: KVNamespace,
 ): Promise<{ candles: Candle[]; fromCache: boolean }> {
-  // Cache key excludes date range — one cache entry covers all backtest periods.
-  // TTL is 24h so data refreshes daily.
-  const cacheKey = `candles_v2:${pair}:${interval}`;
+  const cacheKey = trendbarCacheKey(pair, timeframe);
 
   if (kv) {
     const cached = await kv.get(cacheKey, "json") as Candle[] | null;
     if (cached && cached.length > 0) return { candles: cached, fromCache: true };
   }
 
-  const candles = await fetchCandlesFromAPI(pair, interval, startDate, endDate, apiKey);
+  const candles = await fetchCandlesFromCTrader(pair, timeframe, toMs, trading);
 
   if (kv && candles.length > 0) {
-    await kv.put(cacheKey, JSON.stringify(candles), { expirationTtl: 86400 * 7 });
+    await kv.put(cacheKey, JSON.stringify(candles), { expirationTtl: 86400 });
   }
 
   return { candles, fromCache: false };
 }
-
-const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 interface SafetyLineParams {
   anchorPrice: number;  // p1Price of the safety line
@@ -192,7 +166,7 @@ export interface BacktestResult {
 
 export async function runTrendlineBacktest(
   config: BacktestConfig,
-  apiKey: string,
+  trading: TradingService,
   onProgress?: (msg: string) => void,
   kv?: KVNamespace,
 ): Promise<BacktestResult> {
@@ -200,10 +174,6 @@ export async function runTrendlineBacktest(
   const rejections: Record<string, number> = {};
   const log: string[] = [];
   const progress = (msg: string) => { log.push(msg); onProgress?.(msg); };
-
-  const lookbackMs = 200 * 7 * 24 * 60 * 60 * 1000;
-  const fetchFrom  = new Date(config.fromMs - lookbackMs).toISOString().slice(0, 10);
-  const fetchTo    = new Date(config.toMs).toISOString().slice(0, 10);
 
   // Shared across all pairs — mirrors live bot constraints exactly.
   // openPositions tracks concurrent trades; lastSignalMs enforces the 4H cooldown per pair.
@@ -217,8 +187,8 @@ export async function runTrendlineBacktest(
   const fetchResults = await Promise.all(config.pairs.map(async (pair) => {
     try {
       const [r4H, rD] = await Promise.all([
-        fetchCandles(pair, "4h",   fetchFrom, fetchTo, apiKey, kv),
-        fetchCandles(pair, "1day", fetchFrom, fetchTo, apiKey, kv),
+        fetchCandles(pair, "4H", config.toMs, trading, kv),
+        fetchCandles(pair, "D",  config.toMs, trading, kv),
       ]);
       return { pair, candles4H: r4H.candles, candlesD: rD.candles, error: null as string | null };
     } catch (err) {

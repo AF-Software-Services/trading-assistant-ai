@@ -29,7 +29,6 @@ interface Env {
   KV: KVNamespace;
   ENVIRONMENT: string;
   MARKET_DATA_PROVIDER: string;
-  TWELVE_DATA_API_KEY: string;
   CTRADER_CLIENT_ID: string;
   CTRADER_CLIENT_SECRET: string;
   CTRADER_ACCOUNT_ID: string;
@@ -121,7 +120,6 @@ export function createBotRouter() {
         DB:                    c.env.DB,
         KV:                    c.env.KV,
         MARKET_DATA_PROVIDER:  c.env.MARKET_DATA_PROVIDER,
-        TWELVE_DATA_API_KEY:   c.env.TWELVE_DATA_API_KEY,
         CTRADER_CLIENT_ID:     c.env.CTRADER_CLIENT_ID,
         CTRADER_CLIENT_SECRET: c.env.CTRADER_CLIENT_SECRET,
         CTRADER_ACCOUNT_ID:    c.env.CTRADER_ACCOUNT_ID,
@@ -212,7 +210,6 @@ export function createBotRouter() {
           DB:                    c.env.DB,
           KV:                    c.env.KV,
           MARKET_DATA_PROVIDER:  c.env.MARKET_DATA_PROVIDER,
-          TWELVE_DATA_API_KEY:   c.env.TWELVE_DATA_API_KEY,
           CTRADER_CLIENT_ID:     c.env.CTRADER_CLIENT_ID,
           CTRADER_CLIENT_SECRET: c.env.CTRADER_CLIENT_SECRET,
           CTRADER_ACCOUNT_ID:    c.env.CTRADER_ACCOUNT_ID,
@@ -260,7 +257,6 @@ export function createBotRouter() {
         CTRADER_CLIENT_SECRET: c.env.CTRADER_CLIENT_SECRET,
         CTRADER_ACCOUNT_ID:    c.env.CTRADER_ACCOUNT_ID,
         MARKET_DATA_PROVIDER:  c.env.MARKET_DATA_PROVIDER,
-        TWELVE_DATA_API_KEY:   c.env.TWELVE_DATA_API_KEY,
       });
       return c.json({ success: true });
     } catch (e) {

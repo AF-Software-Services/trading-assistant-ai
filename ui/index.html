@@ -13,14 +13,30 @@
     <aside id="sidebar" class="hidden">
       <div id="pair-selector">
         <div class="section-label">PAIR</div>
-        <div id="pair-buttons">
-          <button class="pair-btn active" data-pair="EUR/USD">EUR/USD</button>
-          <button class="pair-btn" data-pair="GBP/USD">GBP/USD</button>
-          <button class="pair-btn" data-pair="GBP/CAD">GBP/CAD</button>
-          <button class="pair-btn" data-pair="USD/JPY">USD/JPY</button>
-          <button class="pair-btn" data-pair="EUR/GBP">EUR/GBP</button>
-          <button class="pair-btn" data-pair="AUD/USD">AUD/USD</button>
-        </div>
+        <select id="pair-select" class="pair-select">
+          <optgroup label="Forex">
+            <option value="EUR/USD" selected>EUR/USD</option>
+            <option value="GBP/USD">GBP/USD</option>
+            <option value="GBP/CAD">GBP/CAD</option>
+            <option value="USD/JPY">USD/JPY</option>
+            <option value="EUR/GBP">EUR/GBP</option>
+            <option value="AUD/USD">AUD/USD</option>
+          </optgroup>
+          <optgroup label="Indices">
+            <option value="US500">US500</option>
+            <option value="NAS100">NAS100</option>
+            <option value="GER40">GER40</option>
+            <option value="UK100">UK100</option>
+          </optgroup>
+          <optgroup label="Commodities">
+            <option value="XAU/USD">Gold (XAU/USD)</option>
+            <option value="XAG/USD">Silver (XAG/USD)</option>
+            <option value="WTI/USD">WTI Oil</option>
+            <option value="BRENT/USD">Brent Oil</option>
+            <option value="NATGAS">Natural Gas</option>
+            <option value="COPPER">Copper</option>
+          </optgroup>
+        </select>
       </div>
 
       <div id="timeframe-selector">
@@ -733,13 +749,47 @@
             </div>
             <div class="modal-field">
               <label>Pairs (leave all unchecked = all pairs)</label>
-              <div class="modal-pair-checks">
-                <label><input type="checkbox" class="bot-new-pair" value="EUR/USD" /> EUR/USD</label>
-                <label><input type="checkbox" class="bot-new-pair" value="GBP/USD" /> GBP/USD</label>
-                <label><input type="checkbox" class="bot-new-pair" value="GBP/CAD" /> GBP/CAD</label>
-                <label><input type="checkbox" class="bot-new-pair" value="USD/JPY" /> USD/JPY</label>
-                <label><input type="checkbox" class="bot-new-pair" value="EUR/GBP" /> EUR/GBP</label>
-                <label><input type="checkbox" class="bot-new-pair" value="AUD/USD" /> AUD/USD</label>
+              <div class="modal-pair-checks-grouped">
+                <div class="pair-category-group">
+                  <div class="pair-category-header">
+                    <span>Forex</span>
+                    <label class="pair-select-all"><input type="checkbox" class="bot-new-pair-select-all" data-category="forex" /> Select all</label>
+                  </div>
+                  <div class="modal-pair-checks">
+                    <label><input type="checkbox" class="bot-new-pair" data-category="forex" value="EUR/USD" /> EUR/USD</label>
+                    <label><input type="checkbox" class="bot-new-pair" data-category="forex" value="GBP/USD" /> GBP/USD</label>
+                    <label><input type="checkbox" class="bot-new-pair" data-category="forex" value="GBP/CAD" /> GBP/CAD</label>
+                    <label><input type="checkbox" class="bot-new-pair" data-category="forex" value="USD/JPY" /> USD/JPY</label>
+                    <label><input type="checkbox" class="bot-new-pair" data-category="forex" value="EUR/GBP" /> EUR/GBP</label>
+                    <label><input type="checkbox" class="bot-new-pair" data-category="forex" value="AUD/USD" /> AUD/USD</label>
+                  </div>
+                </div>
+                <div class="pair-category-group">
+                  <div class="pair-category-header">
+                    <span>Indices</span>
+                    <label class="pair-select-all"><input type="checkbox" class="bot-new-pair-select-all" data-category="indices" /> Select all</label>
+                  </div>
+                  <div class="modal-pair-checks">
+                    <label><input type="checkbox" class="bot-new-pair" data-category="indices" value="US500" /> US500</label>
+                    <label><input type="checkbox" class="bot-new-pair" data-category="indices" value="NAS100" /> NAS100</label>
+                    <label><input type="checkbox" class="bot-new-pair" data-category="indices" value="GER40" /> GER40</label>
+                    <label><input type="checkbox" class="bot-new-pair" data-category="indices" value="UK100" /> UK100</label>
+                  </div>
+                </div>
+                <div class="pair-category-group">
+                  <div class="pair-category-header">
+                    <span>Commodities</span>
+                    <label class="pair-select-all"><input type="checkbox" class="bot-new-pair-select-all" data-category="commodities" /> Select all</label>
+                  </div>
+                  <div class="modal-pair-checks">
+                    <label><input type="checkbox" class="bot-new-pair" data-category="commodities" value="XAU/USD" /> Gold</label>
+                    <label><input type="checkbox" class="bot-new-pair" data-category="commodities" value="XAG/USD" /> Silver</label>
+                    <label><input type="checkbox" class="bot-new-pair" data-category="commodities" value="WTI/USD" /> WTI Oil</label>
+                    <label><input type="checkbox" class="bot-new-pair" data-category="commodities" value="BRENT/USD" /> Brent Oil</label>
+                    <label><input type="checkbox" class="bot-new-pair" data-category="commodities" value="NATGAS" /> Nat Gas</label>
+                    <label><input type="checkbox" class="bot-new-pair" data-category="commodities" value="COPPER" /> Copper</label>
+                  </div>
+                </div>
               </div>
             </div>
             <div class="modal-field">

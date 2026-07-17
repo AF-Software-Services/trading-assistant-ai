@@ -12,7 +12,6 @@ export interface Env {
   KV: KVNamespace;
   ENVIRONMENT: string;
   MARKET_DATA_PROVIDER: string;
-  TWELVE_DATA_API_KEY: string;
   CTRADER_CLIENT_ID: string;
   CTRADER_CLIENT_SECRET: string;
   CTRADER_ACCOUNT_ID: string;

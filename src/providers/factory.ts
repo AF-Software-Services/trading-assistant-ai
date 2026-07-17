@@ -1,21 +1,19 @@
 import type { MarketDataProvider } from "./interface.ts";
 import { MockMarketDataProvider } from "./mock.ts";
-import { TwelveDataProvider } from "./twelvedata.ts";
+import { CTraderMarketDataProvider } from "./ctrader.ts";
+import type { TradingService } from "../trading/service.ts";
 
 export function createMarketDataProvider(config: {
   provider: string;
-  apiKey?: string;
-  kv?: KVNamespace;
+  trading?: TradingService | null;
 }): MarketDataProvider {
-  if (config.provider === "live" || config.apiKey) {
-    if (!config.apiKey) throw new Error("TWELVE_DATA_API_KEY is required for live provider");
-    return new TwelveDataProvider(config.apiKey);
-  }
-
   switch (config.provider) {
     case "mock":
       return new MockMarketDataProvider();
+    case "ctrader":
+      if (!config.trading) throw new Error("A connected cTrader account is required for the ctrader market data provider");
+      return new CTraderMarketDataProvider(config.trading);
     default:
-      throw new Error(`Unknown market data provider: "${config.provider}". Valid options: "mock", "live".`);
+      throw new Error(`Unknown market data provider: "${config.provider}". Valid options: "mock", "ctrader".`);
   }
 }

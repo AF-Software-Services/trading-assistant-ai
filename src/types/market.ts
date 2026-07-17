@@ -4,7 +4,17 @@ export type CurrencyPair =
   | "GBP/CAD"
   | "USD/JPY"
   | "EUR/GBP"
-  | "AUD/USD";
+  | "AUD/USD"
+  | "US500"
+  | "NAS100"
+  | "GER40"
+  | "UK100"
+  | "XAU/USD"
+  | "XAG/USD"
+  | "WTI/USD"
+  | "BRENT/USD"
+  | "NATGAS"
+  | "COPPER";
 
 export const PHASE1_PAIRS: CurrencyPair[] = [
   "EUR/USD",
@@ -14,6 +24,29 @@ export const PHASE1_PAIRS: CurrencyPair[] = [
   "EUR/GBP",
   "AUD/USD",
 ];
+
+export type InstrumentCategory = "forex" | "indices" | "commodities";
+
+export const PAIR_CATEGORY: Record<CurrencyPair, InstrumentCategory> = {
+  "EUR/USD":   "forex",
+  "GBP/USD":   "forex",
+  "GBP/CAD":   "forex",
+  "USD/JPY":   "forex",
+  "EUR/GBP":   "forex",
+  "AUD/USD":   "forex",
+  "US500":     "indices",
+  "NAS100":    "indices",
+  "GER40":     "indices",
+  "UK100":     "indices",
+  "XAU/USD":   "commodities",
+  "XAG/USD":   "commodities",
+  "WTI/USD":   "commodities",
+  "BRENT/USD": "commodities",
+  "NATGAS":    "commodities",
+  "COPPER":    "commodities",
+};
+
+export const ALL_TRADEABLE_PAIRS: CurrencyPair[] = Object.keys(PAIR_CATEGORY) as CurrencyPair[];
 
 export type Timeframe = "1H" | "2H" | "4H" | "D" | "W";
 

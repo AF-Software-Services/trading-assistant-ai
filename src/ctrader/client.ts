@@ -30,6 +30,8 @@ const PT = {
   ERROR_RES:                2142,
   GET_ACCOUNTS_BY_TOKEN_REQ: 2149,
   GET_ACCOUNTS_BY_TOKEN_RES: 2150,
+  GET_TRENDBARS_REQ:        2137,
+  GET_TRENDBARS_RES:        2138,
 } as const;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -274,6 +276,30 @@ const SYMBOL_SCHEMA: MessageSchema = {
 const SYMBOL_BY_ID_RES_SCHEMA: MessageSchema = {
   symbol: { no: 3, type: { t: 'message', schema: SYMBOL_SCHEMA }, repeated: true },
 };
+const GET_TRENDBARS_REQ_SCHEMA: MessageSchema = {
+  ctidTraderAccountId: { no: 2, type: { t: 'varint' } },
+  fromTimestamp:        { no: 3, type: { t: 'varint' } },
+  toTimestamp:           { no: 4, type: { t: 'varint' } },
+  period:                { no: 5, type: { t: 'varint' } },
+  symbolId:              { no: 6, type: { t: 'varint' } },
+  count:                 { no: 7, type: { t: 'varint' } },
+};
+const TRENDBAR_SCHEMA: MessageSchema = {
+  volume:                { no: 3, type: { t: 'varint' } },
+  period:                { no: 4, type: { t: 'varint' } },
+  low:                   { no: 5, type: { t: 'varint' } },
+  deltaOpen:             { no: 6, type: { t: 'varint' } },
+  deltaClose:            { no: 7, type: { t: 'varint' } },
+  deltaHigh:             { no: 8, type: { t: 'varint' } },
+  utcTimestampInMinutes: { no: 9, type: { t: 'varint' } },
+};
+const GET_TRENDBARS_RES_SCHEMA: MessageSchema = {
+  ctidTraderAccountId: { no: 2, type: { t: 'varint' } },
+  period:                { no: 3, type: { t: 'varint' } },
+  trendbar:              { no: 5, type: { t: 'message', schema: TRENDBAR_SCHEMA }, repeated: true },
+  symbolId:              { no: 6, type: { t: 'varint' } },
+  hasMore:               { no: 7, type: { t: 'varint' } },
+};
 const TRADER_REQ_SCHEMA: MessageSchema = {
   ctidTraderAccountId: { no: 2, type: { t: 'varint' } },
 };
@@ -361,6 +387,16 @@ export const SYMBOL_IDS: Record<string, number> = {
   'AUD/USD': 4,
   'EUR/GBP': 5,
   'GBP/CAD': 7,
+  'US500':    115,
+  'NAS100':   116,
+  'GER40':    110,
+  'UK100':    113,
+  'XAU/USD':  41,
+  'XAG/USD':  42,
+  'WTI/USD':  250,  // Pepperstone calls this "SpotCrude"
+  'BRENT/USD': 249, // Pepperstone calls this "SpotBrent"
+  'NATGAS':   251,
+  'COPPER':   109,
 };
 
 // "EUR/USD" → "EURUSD", already normalised passes through unchanged
@@ -794,6 +830,70 @@ export class CTraderClient {
     try {
       await this.auth(conn);
       return await fetchTraderInfo(conn, this.cfg.accountId);
+    } finally { conn.close(); }
+  }
+
+  // Resolves a display pair string ("EUR/USD", "US500", ...) to the broker's real symbolId.
+  async resolveSymbolId(pair: string): Promise<number> {
+    const conn = await this.connect();
+    try {
+      await this.auth(conn);
+      await ensureSymbolCache(conn, this.cfg.accountId);
+      const id = lookupSymbolId(this.cfg.accountId, pair);
+      if (id === undefined) throw new Error(`Unknown symbol for pair "${pair}"`);
+      return id;
+    } finally { conn.close(); }
+  }
+
+  // Historical OHLC candles from Pepperstone's own feed — the source of truth for both
+  // charting and backtesting, so results always match what live trades actually fill against.
+  // Trendbar prices come back delta-encoded, always at a fixed 5-decimal wire precision
+  // (×100000) — confirmed empirically against known real prices across a 5-digit pair
+  // (EUR/USD), a 3-digit pair (USD/JPY), and a 2-digit instrument (XAU/USD): all three only
+  // decode correctly with a fixed ×100000 divisor, NOT the symbol's own `digits` field (that's
+  // display-only metadata and does not describe this wire format, unlike order-related fields
+  // which use plain, unscaled doubles).
+  async getTrendbars(
+    symbolId: number,
+    period: number,
+    count: number,
+    toTimestamp: number = Date.now(),
+  ): Promise<Array<{ timestamp: number; open: number; high: number; low: number; close: number; volume: number }>> {
+    const conn = await this.connect();
+    try {
+      await this.auth(conn);
+      const scale = 100000;
+
+      await conn.send(PT.GET_TRENDBARS_REQ, GET_TRENDBARS_REQ_SCHEMA, {
+        ctidTraderAccountId: this.cfg.accountId,
+        symbolId,
+        period,
+        count,
+        toTimestamp,
+      });
+      const res  = await conn.waitFor(PT.GET_TRENDBARS_RES, GET_TRENDBARS_RES_SCHEMA, 20000);
+      const bars = (res['trendbar'] ?? []) as Array<{
+        utcTimestampInMinutes: number;
+        low: number;
+        deltaOpen: number;
+        deltaClose: number;
+        deltaHigh: number;
+        volume: number;
+      }>;
+
+      return bars
+        .map(b => {
+          const low = b.low / scale;
+          return {
+            timestamp: b.utcTimestampInMinutes * 60000,
+            low,
+            open:  low + b.deltaOpen  / scale,
+            close: low + b.deltaClose / scale,
+            high:  low + b.deltaHigh  / scale,
+            volume: b.volume,
+          };
+        })
+        .sort((a, b) => a.timestamp - b.timestamp);
     } finally { conn.close(); }
   }
 

@@ -97,6 +97,14 @@ export class TradingService {
   async getHistory(fromMs: number, toMs: number): Promise<Deal[]> {
     return this.client.getHistory(fromMs, toMs);
   }
+
+  async resolveSymbolId(pair: string): Promise<number> {
+    return this.client.resolveSymbolId(pair);
+  }
+
+  async getTrendbars(symbolId: number, period: number, count: number, toTimestamp?: number) {
+    return this.client.getTrendbars(symbolId, period, count, toTimestamp);
+  }
 }
 
 function buildClientForAccount(

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CurrencyPair, Timeframe } from "../types/market.ts";
-import { PHASE1_PAIRS } from "../types/market.ts";
+import { PHASE1_PAIRS, ALL_TRADEABLE_PAIRS } from "../types/market.ts";
 import { createMarketDataProvider } from "../providers/factory.ts";
 import { calculateATR } from "../engines/trend.ts";
 import { detectTrendlineSignal, getDailyBias, detectTrendlineOverlays } from "../engines/trendline.ts";
@@ -30,7 +30,6 @@ export interface Env {
   KV: KVNamespace;
   ENVIRONMENT: string;
   MARKET_DATA_PROVIDER: string;
-  TWELVE_DATA_API_KEY: string;
   CTRADER_CLIENT_ID: string;
   CTRADER_CLIENT_SECRET: string;
   CTRADER_ACCOUNT_ID: string;
@@ -45,15 +44,24 @@ function json(data: unknown) {
   return text(JSON.stringify(data, null, 2));
 }
 
+const PAIR_ENUM = z.enum(ALL_TRADEABLE_PAIRS as [CurrencyPair, ...CurrencyPair[]]);
+
+// Candle data now rides on a live cTrader connection rather than an independent data
+// vendor, so it can't be built once at registration time — connect fresh per tool call.
+async function getProvider(env: Env) {
+  const trading = await TradingService.tryConnect(env);
+  if (!trading) throw new Error("cTrader not connected");
+  return createMarketDataProvider({ provider: env.MARKET_DATA_PROVIDER, trading });
+}
+
 export function registerTools(server: McpServer, env: Env): void {
-  const provider = createMarketDataProvider({ provider: env.MARKET_DATA_PROVIDER, apiKey: env.TWELVE_DATA_API_KEY || undefined, kv: env.KV });
 
   // ── 1. analyse_pair ─────────────────────────────────────────────────────────
   server.tool(
     "analyse_pair",
     "Analyse a currency pair using the trendline bot strategy: detects 4H trendline break+retest setups with daily bias filter. Returns a live signal if conditions are met — identical logic to what the live bot and backtests use. Position sizing uses the real connected cTrader account balance.",
     {
-      pair:        z.enum(["EUR/USD", "GBP/USD", "GBP/CAD", "USD/JPY", "EUR/GBP", "AUD/USD"]),
+      pair:        PAIR_ENUM,
       riskPercent: z.number().min(0.1).max(10).optional().describe("Override only — normally read from saved settings"),
       rewardRisk:  z.number().min(1).max(10).optional().describe("Override only — normally read from saved settings"),
     },
@@ -67,6 +75,7 @@ export function registerTools(server: McpServer, env: Env): void {
       const riskAmount      = resolvedBalance && resolvedRiskPct
         ? resolvedBalance * (resolvedRiskPct / 100) : undefined;
 
+      const provider = await getProvider(env);
       const [candles4H, candlesD, tick] = await Promise.all([
         provider.getCandles(pair as CurrencyPair, "4H",   200),
         provider.getCandles(pair as CurrencyPair, "D",     30),
@@ -189,7 +198,7 @@ export function registerTools(server: McpServer, env: Env): void {
     "open_chart",
     "Return a URL to open the trading chart UI for a specific pair and timeframe, along with a brief analysis summary.",
     {
-      pair:      z.enum(["EUR/USD", "GBP/USD", "GBP/CAD", "USD/JPY", "EUR/GBP", "AUD/USD"]).optional().default("EUR/USD"),
+      pair:      PAIR_ENUM.optional().default("EUR/USD"),
       timeframe: z.enum(["1H", "4H", "D", "W"]).optional().default("1H"),
     },
     async ({ pair, timeframe }) => {
@@ -199,6 +208,7 @@ export function registerTools(server: McpServer, env: Env): void {
       const encodedPair = encodeURIComponent(p);
       const chartUrl = `https://trading-assistant-ai.andrew-dobson.workers.dev/?pair=${encodedPair}&timeframe=${tf}`;
 
+      const provider = await getProvider(env);
       const [candles4H, candlesD] = await Promise.all([
         provider.getCandles(p, "4H",   200),
         provider.getCandles(p, "D",     30),
@@ -267,7 +277,7 @@ export function registerTools(server: McpServer, env: Env): void {
     "log_trade",
     "Record a trade entry in the journal with full ML feature capture. Call this when the user confirms they are taking a trade. Captures signal context, zone data, timing, and candle snapshots automatically. Returns the journal entry ID for later outcome tracking.",
     {
-      pair:             z.enum(["EUR/USD", "GBP/USD", "GBP/CAD", "USD/JPY", "EUR/GBP", "AUD/USD"]),
+      pair:             PAIR_ENUM,
       direction:        z.enum(["buy", "sell"]),
       entryPrice:       z.number().describe("Actual entry price"),
       stopLoss:         z.number().describe("Stop loss price"),
@@ -303,6 +313,7 @@ export function registerTools(server: McpServer, env: Env): void {
       let candles4h: Array<{ open: number; high: number; low: number; close: number }> = [];
       let candlesD:  Array<{ open: number; high: number; low: number; close: number }> = [];
       try {
+        const provider = await getProvider(env);
         const raw4h = await provider.getCandles(pair, "4H", 20);
         const rawD  = await provider.getCandles(pair, "D", 10);
         candles4h = raw4h.map(c => ({ open: c.open, high: c.high, low: c.low, close: c.close }));
@@ -438,7 +449,7 @@ export function registerTools(server: McpServer, env: Env): void {
       botId:            z.string().optional().describe("Bot ID (or its first 8 chars) to target — required only if you have more than one bot"),
       minScore:         z.number().min(0).max(100).optional().describe("Minimum signal confidence score to act on"),
       maxOpenPositions: z.number().min(1).max(10).optional().describe("Max concurrent open positions"),
-      pairs:            z.array(z.enum(["EUR/USD", "GBP/USD", "GBP/CAD", "USD/JPY", "EUR/GBP", "AUD/USD"])).optional().describe("Pairs this bot trades — omit or empty for all 6"),
+      pairs:            z.array(PAIR_ENUM).optional().describe("Pairs this bot trades — omit or empty for all tradeable pairs"),
     },
     async ({ mode, botId, minScore, maxOpenPositions, pairs }) => {
       const bots = await listBots(env.DB);
@@ -631,7 +642,6 @@ export function registerTools(server: McpServer, env: Env): void {
             DB:                    env.DB,
             KV:                    env.KV,
             MARKET_DATA_PROVIDER:  env.MARKET_DATA_PROVIDER,
-            TWELVE_DATA_API_KEY:   env.TWELVE_DATA_API_KEY,
             CTRADER_CLIENT_ID:     env.CTRADER_CLIENT_ID,
             CTRADER_CLIENT_SECRET: env.CTRADER_CLIENT_SECRET,
             CTRADER_ACCOUNT_ID:    env.CTRADER_ACCOUNT_ID,

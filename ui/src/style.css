@@ -75,35 +75,24 @@ html, body {
   text-transform: uppercase;
 }
 
-/* Pair buttons */
-#pair-buttons {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-}
-
-.pair-btn {
+/* Pair select */
+.pair-select {
+  width: 100%;
   background: var(--bg);
   border: 1px solid var(--border);
-  color: var(--muted);
-  border-radius: 4px;
-  padding: 7px 6px;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 500;
-  transition: all 0.15s;
-  text-align: center;
-}
-
-.pair-btn:hover {
-  border-color: #58a6ff;
   color: var(--text);
+  border-radius: 4px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: border-color 0.15s;
 }
 
-.pair-btn.active {
-  background: #1f6feb;
+.pair-select:hover,
+.pair-select:focus {
   border-color: #58a6ff;
-  color: #fff;
+  outline: none;
 }
 
 /* Timeframe buttons */
@@ -1693,6 +1682,42 @@ html, body {
   border-color: var(--muted);
   color: var(--muted);
 }
+.bot-card-row-pairs {
+  align-items: flex-start;
+}
+.bot-card-pairs-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+.pair-category-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pair-category-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.pair-category-select-all {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: pointer;
+  padding: 0;
+}
+.pair-category-select-all:hover {
+  text-decoration: underline;
+}
 .bot-card-pairs {
   display: flex;
   gap: 6px;
@@ -1923,6 +1948,24 @@ html, body {
 .custom-select-option.active {
   background: rgba(88,166,255,0.18);
   color: var(--accent);
+}
+.modal-pair-checks-grouped {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.modal-pair-checks-grouped .pair-category-header {
+  font-size: 10px;
+}
+.modal-pair-checks-grouped .pair-select-all {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--accent);
+  cursor: pointer;
 }
 .modal-pair-checks {
   display: flex;

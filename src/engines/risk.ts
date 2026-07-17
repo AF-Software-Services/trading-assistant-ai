@@ -3,12 +3,22 @@ import type { Direction, RiskCalculation } from "../types/trading.ts";
 
 // Pip sizes
 const PIP_SIZE: Record<CurrencyPair, number> = {
-  "EUR/USD": 0.0001,
-  "GBP/USD": 0.0001,
-  "GBP/CAD": 0.0001,
-  "AUD/USD": 0.0001,
-  "EUR/GBP": 0.0001,
-  "USD/JPY": 0.01,
+  "EUR/USD":   0.0001,
+  "GBP/USD":   0.0001,
+  "GBP/CAD":   0.0001,
+  "AUD/USD":   0.0001,
+  "EUR/GBP":   0.0001,
+  "USD/JPY":   0.01,
+  "US500":     1,
+  "NAS100":    1,
+  "GER40":     1,
+  "UK100":     1,
+  "XAU/USD":   0.01,
+  "XAG/USD":   0.001,
+  "WTI/USD":   0.01,
+  "BRENT/USD": 0.01,
+  "NATGAS":    0.001,
+  "COPPER":    0.0001,
 };
 
 // Standard lot size in units
