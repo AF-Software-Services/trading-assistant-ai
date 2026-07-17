@@ -21,6 +21,9 @@ id = "a82afed2ad864e6bb1d11cd57e2f8219"
 [limits]
 cpu_ms = 300000
 
+[observability]
+enabled = true
+
 [assets]
 directory = "./dist/ui"
 
