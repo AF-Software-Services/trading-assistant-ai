@@ -1954,10 +1954,11 @@ html, body {
   flex-direction: column;
   gap: 10px;
 }
-.modal-pair-checks-grouped .pair-category-header {
+.modal-pair-checks-grouped .pair-category-header,
+.backtest-pairs-checks-grouped .pair-category-header {
   font-size: 10px;
 }
-.modal-pair-checks-grouped .pair-select-all {
+.pair-select-all {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -1966,6 +1967,11 @@ html, body {
   letter-spacing: 0;
   color: var(--accent);
   cursor: pointer;
+}
+.backtest-pairs-checks-grouped {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 .modal-pair-checks {
   display: flex;
