@@ -2,6 +2,7 @@ import { PHASE1_PAIRS }                    from "../types/market.ts";
 import type { CurrencyPair }               from "../types/market.ts";
 import type { BotInstance }                from "./bot-types.ts";
 import { createMarketDataProvider }        from "../providers/factory.ts";
+import { pipFactor, PIP_VALUE_GBP }        from "../engines/pip-value.ts";
 import { detectTrendlineSignal, pickTrendlineTunables, getTradingSession } from "../engines/trendline.ts";
 import type { TradingSession }             from "../engines/trendline.ts";
 import { storeTrendlineTrailState }        from "./monitor.ts";
@@ -32,19 +33,6 @@ export interface BotRunResult {
   signalsFailed:   number;
   errors:          string[];
   warnings?:       string[];
-}
-
-const PIP_VALUE_GBP: Record<string, number> = {
-  "EUR/USD": 7.50,
-  "GBP/USD": 7.50,
-  "USD/JPY": 7.50,
-  "AUD/USD": 7.50,
-  "EUR/GBP": 10.00,
-  "GBP/CAD": 5.50,
-};
-
-function pipFactor(pair: string): number {
-  return pair.includes("JPY") ? 100 : 10000;
 }
 
 export function calcLots(riskAmountGBP: number, pair: string, entryPrice: number, stopLoss: number): number {
