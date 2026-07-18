@@ -5,20 +5,7 @@ import type { BotSignal } from "../bot/engine.ts";
 import { detectTrendlineSignal, getTradingSession } from "../engines/trendline.ts";
 import type { TrendlineTunables, TpMode, TradingSession } from "../engines/trendline.ts";
 import type { TradingService } from "../trading/service.ts";
-
-// Approximate GBP pip value per standard lot
-const PIP_VALUE_GBP: Record<string, number> = {
-  "EUR/USD": 7.50,
-  "GBP/USD": 7.50,
-  "USD/JPY": 7.50,
-  "AUD/USD": 7.50,
-  "EUR/GBP": 10.00,
-  "GBP/CAD": 5.50,
-};
-
-function pipFactor(pair: string): number {
-  return pair.includes("JPY") ? 100 : 10000;
-}
+import { pipFactor, PIP_VALUE_GBP } from "../engines/pip-value.ts";
 
 
 export interface BacktestConfig {
