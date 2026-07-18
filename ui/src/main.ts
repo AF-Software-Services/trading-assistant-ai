@@ -2667,6 +2667,15 @@ async function initBacktestTab(): Promise<void> {
   toEl.value   = toDate
 
   document.getElementById('bt-run-btn')?.addEventListener('click', runBacktest)
+
+  // Per-category "select all" in the backtest pair checklist
+  document.querySelectorAll<HTMLInputElement>('.bt-pair-select-all').forEach(selectAll => {
+    selectAll.addEventListener('click', () => {
+      const category = selectAll.dataset.category
+      document.querySelectorAll<HTMLInputElement>(`.bt-pair-check[data-category="${category}"]`)
+        .forEach(c => { c.checked = selectAll.checked })
+    })
+  })
   document.getElementById('bt-refresh-runs')?.addEventListener('click', loadBacktestRuns)
   document.getElementById('bt-delete-btn')?.addEventListener('click', deleteCurrentRun)
   document.getElementById('bt-close-btn')?.addEventListener('click', () => {
