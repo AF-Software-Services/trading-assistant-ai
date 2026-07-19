@@ -44,7 +44,11 @@ function pipFactor(pair: string): number {
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 
 export async function monitorPositions(env: Env): Promise<void> {
-  const executedSignals = await getBotSignals(env.DB, { status: "executed", limit: 20 });
+  // source: "live" is essential here, not just tidiness — without it, backtest-simulated
+  // "executed" signals (which can number in the thousands and have created_at timestamps
+  // close to "now" for any backtest run up to the present) crowd real open positions out of
+  // this DESC-ordered, LIMIT-ed query entirely, silently stopping monitoring for them.
+  const executedSignals = await getBotSignals(env.DB, { status: "executed", source: "live", limit: 20 });
   const openSignals     = executedSignals.filter(s => s.ctraderPositionId !== null);
   if (openSignals.length === 0) return;
 
@@ -151,13 +155,23 @@ async function monitorAccountSignals(
           // deleting its journal entry at this point previously destroyed the record of a
           // trade that went on to close for a real win/loss with nothing left to show it.
           // Actually cancel the order first — only once the broker confirms there's nothing
-          // left to fill is it safe to stop tracking it.
+          // left to fill is it safe to stop tracking it. ORDER_NOT_FOUND specifically means
+          // the broker has no such order at all (already gone, not "just filled" — a fill
+          // would show up as a real position or deal, both already ruled out above), so it's
+          // just as safe to proceed as an explicit cancel. Any other error is left for next
+          // tick as before, since those don't confirm the order is actually gone.
           let cancelled = false;
           try {
             await trading.cancelOrder(posId);
             cancelled = true;
           } catch (e) {
-            console.warn(`[Monitor] Could not cancel expired order ${posId} for ${signal.pair} (may have just filled) — leaving for next tick: ${(e as Error).message}`);
+            const msg = (e as Error).message;
+            if (msg.includes('ORDER_NOT_FOUND')) {
+              cancelled = true;
+              console.log(`[Monitor] Order ${posId} for ${signal.pair} already gone (ORDER_NOT_FOUND) — treating as never filled`);
+            } else {
+              console.warn(`[Monitor] Could not cancel expired order ${posId} for ${signal.pair} (may have just filled) — leaving for next tick: ${msg}`);
+            }
           }
           if (cancelled) {
             if (signal.journalId) {
