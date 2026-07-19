@@ -50,6 +50,12 @@ export interface BotSignal {
   closeTime:          number | null;
   pnlPips:            number | null;
   pnlGbp:             number | null;
+  // Identifies the exact trendline this signal was based on (anchor swing-point candle
+  // timestamps) — lets a loss on this specific line be blacklisted, distinct from a genuinely
+  // new setup on the same pair. Null for non-trendline signal types.
+  lineType:           'resistance' | 'support' | null;
+  lineP1Ts:           number | null;
+  lineP2Ts:           number | null;
 }
 
 // ── KV helpers ────────────────────────────────────────────────────────────────
@@ -86,13 +92,15 @@ export async function saveBotSignal(db: D1Database, signal: BotSignal): Promise<
         signal_type, signal_timeframe, signal_confidence,
         trend, structure, mtf_bias, mtf_label, atr, in_aoi,
         fib_label, trade_class, zone_type, pattern_type,
-        outcome, close_price, close_time, pnl_pips, pnl_gbp)
+        outcome, close_price, close_time, pnl_pips, pnl_gbp,
+        line_type, line_p1_ts, line_p2_ts)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
              ?, ?,
              ?, ?, ?,
              ?, ?, ?, ?, ?, ?,
              ?, ?, ?, ?,
-             ?, ?, ?, ?, ?)
+             ?, ?, ?, ?, ?,
+             ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        status               = excluded.status,
        executed_at          = excluded.executed_at,
@@ -138,7 +146,31 @@ export async function saveBotSignal(db: D1Database, signal: BotSignal): Promise<
     signal.closeTime ?? null,
     signal.pnlPips ?? null,
     signal.pnlGbp ?? null,
+    signal.lineType ?? null,
+    signal.lineP1Ts ?? null,
+    signal.lineP2Ts ?? null,
   ).run();
+}
+
+// Has this exact trendline (same pair + type + anchor points) lost within the given window?
+// Used to blacklist a specific broken level rather than the whole pair after a loss —
+// a losing setup at these anchors is a real signal that this level doesn't hold, distinct
+// from cooldown-based re-entry prevention which only blocks by pair+time.
+export async function hasRecentLossOnLine(
+  db: D1Database,
+  pair: string,
+  lineType: 'resistance' | 'support',
+  p1Ts: number,
+  p2Ts: number,
+  sinceMs: number,
+): Promise<boolean> {
+  const row = await db.prepare(
+    `SELECT 1 FROM bot_signals
+     WHERE pair = ? AND line_type = ? AND line_p1_ts = ? AND line_p2_ts = ?
+       AND outcome = 'sl' AND close_time >= ?
+     LIMIT 1`
+  ).bind(pair, lineType, p1Ts, p2Ts, sinceMs).first();
+  return row !== null;
 }
 
 export async function recordBotSignalOutcome(
@@ -259,5 +291,8 @@ function rowToSignal(row: Record<string, unknown>): BotSignal {
     closeTime:         (row["close_time"]          as number | null) ?? null,
     pnlPips:           (row["pnl_pips"]            as number | null) ?? null,
     pnlGbp:            (row["pnl_gbp"]             as number | null) ?? null,
+    lineType:          (row["line_type"]           as 'resistance' | 'support' | null) ?? null,
+    lineP1Ts:          (row["line_p1_ts"]          as number | null) ?? null,
+    lineP2Ts:          (row["line_p2_ts"]          as number | null) ?? null,
   };
 }

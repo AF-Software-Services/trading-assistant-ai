@@ -168,6 +168,12 @@ export async function runTrendlineBacktest(
   const lastSignalMs: Record<string, number> = {};
   const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 
+  // Mirrors runBotScan's per-line blacklist: a loss on this exact trendline (same pair +
+  // type + anchor timestamps) blocks re-entry on it for 24h, distinct from the pair-wide
+  // cooldown above.
+  const lineBlacklist: Array<{ pair: string; lineType: string; p1Ts: number; p2Ts: number; until: number }> = [];
+  const LINE_BLACKLIST_MS = 24 * 60 * 60 * 1000;
+
   // Fetch every pair's candles in parallel rather than one-at-a-time — the account's
   // per-minute rate limit has real headroom now, so there's no need to pace requests out.
   progress(`Fetching data for ${config.pairs.length} pairs…`);
@@ -273,6 +279,14 @@ export async function runTrendlineBacktest(
         continue;
       }
 
+      const lineType = sig.actionLine.type;
+      const lineP1Ts = history[sig.actionLine.p1Index]!.timestamp;
+      const lineP2Ts = history[sig.actionLine.p2Index]!.timestamp;
+      if (lineBlacklist.some(b => b.pair === pair && b.lineType === lineType && b.p1Ts === lineP1Ts && b.p2Ts === lineP2Ts && cutoff < b.until)) {
+        rejections["line_blacklisted"] = (rejections["line_blacklisted"] ?? 0) + 1;
+        continue;
+      }
+
       const lots = calcLots(riskAmount, pair, sig.entryPrice, sig.stopLoss);
       if (lots <= 0) continue;
 
@@ -294,6 +308,11 @@ export async function runTrendlineBacktest(
       // Register position and cooldown — mirrors what runBotScan writes to KV
       openPositions.push({ pair, closeTime: outcomeResult.closeTime });
       lastSignalMs[pair] = cutoff;
+
+      // Blacklist this exact line for 24h if it just lost — mirrors runBotScan/monitor.ts
+      if (outcomeResult.outcome === "sl") {
+        lineBlacklist.push({ pair, lineType, p1Ts: lineP1Ts, p2Ts: lineP2Ts, until: outcomeResult.closeTime + LINE_BLACKLIST_MS });
+      }
 
       const pnlGbp = outcomeResult.pnlPips * lots * pipVal;
 
@@ -337,6 +356,9 @@ export async function runTrendlineBacktest(
         closeTime:        outcomeResult.closeTime,
         pnlPips:          +outcomeResult.pnlPips.toFixed(1),
         pnlGbp:           +pnlGbp.toFixed(2),
+        lineType,
+        lineP1Ts,
+        lineP2Ts,
       };
 
       allSignals.push(signal);
