@@ -15,7 +15,10 @@ import {
   saveBotSignal,
   getBotSignals,
   updateBotSignalStatus,
+  hasRecentLossOnLine,
 } from "./signal-store.ts";
+
+const LINE_BLACKLIST_MS = 24 * 60 * 60 * 1000;
 
 // Re-export store types and functions so existing callers need no import changes.
 export type { BotSignal, BotSettings } from "./signal-store.ts";
@@ -283,6 +286,9 @@ export async function runBotScan(env: {
               atr:               null, inAoi: false, fibLabel: null,
               tradeClass:        "trendline", zoneType: null, patternType: null,
               outcome: null, closePrice: null, closeTime: null, pnlPips: null, pnlGbp: null,
+              lineType: tlNoBias.actionLine.type,
+              lineP1Ts: candles4H[tlNoBias.actionLine.p1Index]!.timestamp,
+              lineP2Ts: candles4H[tlNoBias.actionLine.p2Index]!.timestamp,
             });
           }
           continue;
@@ -291,6 +297,12 @@ export async function runBotScan(env: {
 
         const retestHourUtc = new Date(candles4H[tlSig.retestIndex]!.timestamp).getUTCHours();
         if (!allowedSessions[getTradingSession(retestHourUtc)]) continue;
+
+        const lineType = tlSig.actionLine.type;
+        const lineP1Ts = candles4H[tlSig.actionLine.p1Index]!.timestamp;
+        const lineP2Ts = candles4H[tlSig.actionLine.p2Index]!.timestamp;
+        const lineBlacklisted = await hasRecentLossOnLine(env.DB, pair, lineType, lineP1Ts, lineP2Ts, Date.now() - LINE_BLACKLIST_MS);
+        if (lineBlacklisted) continue;
 
         result.signalsFound++;
 
@@ -337,6 +349,9 @@ export async function runBotScan(env: {
           closeTime:        null,
           pnlPips:          null,
           pnlGbp:           null,
+          lineType,
+          lineP1Ts,
+          lineP2Ts,
         };
 
         if (mode === "approval") {
