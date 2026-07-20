@@ -18,6 +18,9 @@ const BASE_PRICES: Record<CurrencyPair, number> = {
   "BRENT/USD": 84,
   "NATGAS":    3.5,
   "COPPER":    4.6,
+  "USD/CAD":   1.3800,
+  "USD/SEK":   9.6500,
+  "USD/CHF":   0.8000,
 };
 
 const TIMEFRAME_MS: Record<Timeframe, number> = {

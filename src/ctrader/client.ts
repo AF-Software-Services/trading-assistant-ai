@@ -399,6 +399,9 @@ export const SYMBOL_IDS: Record<string, number> = {
   'BRENT/USD': 249, // Pepperstone calls this "SpotBrent"
   'NATGAS':   251,
   'COPPER':   109,
+  'USD/CAD':  8,   // confirmed live via Pepperstone's own symbol list
+  'USD/SEK':  29,
+  'USD/CHF':  6,
 };
 
 // "EUR/USD" → "EURUSD", already normalised passes through unchanged

@@ -14,7 +14,10 @@ export type CurrencyPair =
   | "WTI/USD"
   | "BRENT/USD"
   | "NATGAS"
-  | "COPPER";
+  | "COPPER"
+  | "USD/CAD"
+  | "USD/SEK"
+  | "USD/CHF";
 
 export const PHASE1_PAIRS: CurrencyPair[] = [
   "EUR/USD",
@@ -44,6 +47,13 @@ export const PAIR_CATEGORY: Record<CurrencyPair, InstrumentCategory> = {
   "BRENT/USD": "commodities",
   "NATGAS":    "commodities",
   "COPPER":    "commodities",
+  // Added for the DXY synthetic-index formula (needs EUR/USD, USD/JPY, GBP/USD, USD/CAD,
+  // USD/SEK, USD/CHF closes) — the first three were already tradeable; these three weren't.
+  // Categorized as forex like any other pair, so they're tradeable by any bot too, not just
+  // usable as DXY inputs.
+  "USD/CAD":   "forex",
+  "USD/SEK":   "forex",
+  "USD/CHF":   "forex",
 };
 
 export const ALL_TRADEABLE_PAIRS: CurrencyPair[] = Object.keys(PAIR_CATEGORY) as CurrencyPair[];
