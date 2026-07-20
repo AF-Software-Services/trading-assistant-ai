@@ -2128,7 +2128,9 @@ function initBot(): void {
     const typeClass = bot.type === 'trendline' ? 'trendline' : ''
     const pairPills = Object.entries(PAIR_CATEGORIES).map(([category, pairs]) => {
       const pills = pairs.map(p => {
-        const active = bot.pairs.length === 0 || bot.pairs.includes(p)
+        // Empty pairs falls back to forex-only in the backend scan (bot/engine.ts), not all 16 —
+        // mirror that here instead of highlighting every pill.
+        const active = bot.pairs.length === 0 ? PAIR_CATEGORIES.Forex.includes(p) : bot.pairs.includes(p)
         return `<span class="bot-pair-pill ${active ? 'active' : ''}" data-pair="${p}" data-bot-id="${bot.id}">${p}</span>`
       }).join('')
       return `<div class="pair-category-group">
