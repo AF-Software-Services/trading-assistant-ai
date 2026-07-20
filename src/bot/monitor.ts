@@ -16,6 +16,7 @@ import { updateJournalOutcome, deleteJournalEntry } from "../storage/journal.ts"
 import { createMarketDataProvider }        from "../providers/factory.ts";
 import { calculateATR }                    from "../engines/trend.ts";
 import { roundPrice }                      from "../engines/trendline.ts";
+import { pipFactor }                       from "../engines/pip-value.ts";
 
 interface Env {
   DB: D1Database;
@@ -35,10 +36,6 @@ interface TrailState {
 
 function trailKey(signalId: string): string {
   return `trail:${signalId}`;
-}
-
-function pipFactor(pair: string): number {
-  return pair.includes("JPY") ? 100 : 10000;
 }
 
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
@@ -208,7 +205,7 @@ async function monitorAccountSignals(
         ? position.openPrice - riskDistance
         : position.openPrice + riskDistance, signal.pair);
       try {
-        await trading.amendPosition(posId, newSL, position.takeProfit ?? signal.takeProfit ?? undefined);
+        await trading.amendPosition(posId, newSL, position.takeProfit ?? signal.takeProfit ?? undefined, signal.pair);
         console.log(`[Monitor] ${signal.pair} ${signal.direction} had no stop loss — applied ${newSL.toFixed(5)} (real entry ${position.openPrice}, intended risk ${riskDistance.toFixed(5)})`);
       } catch (e) {
         console.error(`[Monitor] Failed to repair missing SL for ${signal.id}:`, e);
@@ -240,7 +237,7 @@ async function monitorAccountSignals(
         : newSL < state.currentSL - atr * 0.1;
 
       if (slImproved) {
-        await trading.amendPosition(posId, newSL, signal.takeProfit ?? undefined);
+        await trading.amendPosition(posId, newSL, signal.takeProfit ?? undefined, signal.pair);
         state.currentSL = newSL;
         console.log(`[Monitor] Trail ${signal.pair} ${signal.direction}: SL → ${newSL.toFixed(5)}`);
       }

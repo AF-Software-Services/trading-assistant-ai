@@ -28,6 +28,17 @@ export function roundPrice(price: number, pair: string): number {
   return Math.round(price * factor) / factor;
 }
 
+// Rounds to the broker's own decimal precision for a symbol (cTrader's ProtoOASymbol.digits,
+// fetched at order time — see CTraderClient.placeOrder/amendPosition). Used as the final,
+// broker-accurate correction on top of roundPrice's pair-based guess above, which only knows
+// "JPY or not" and gets indices/commodities' actual decimal count wrong (e.g. US500 trades at
+// 2 decimals, not 5) — that guess is fine for internal display/calculation, but a price with
+// too many decimals sent to the broker gets the whole order rejected outright.
+export function roundToDigits(price: number, digits: number): number {
+  const factor = Math.pow(10, digits);
+  return Math.round(price * factor) / factor;
+}
+
 export interface DetectedLine {
   type:    "resistance" | "support";
   p1Index: number;
