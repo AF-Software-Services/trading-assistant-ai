@@ -831,59 +831,6 @@
               Uses your saved bot &amp; risk settings — change them in Risk Settings or Bot Settings.
             </div>
             <div class="backtest-config-row">
-              <label>From Date</label>
-              <input type="date" id="bt-from" />
-            </div>
-            <div class="backtest-config-row">
-              <label>To Date</label>
-              <input type="date" id="bt-to" />
-            </div>
-            <div class="backtest-config-row backtest-pairs-row">
-              <label>Pairs</label>
-              <div class="backtest-pairs-checks-grouped">
-                <div class="pair-category-group">
-                  <div class="pair-category-header">
-                    <span>Forex</span>
-                    <label class="pair-select-all"><input type="checkbox" class="bt-pair-select-all" data-category="forex" checked /> Select all</label>
-                  </div>
-                  <div class="backtest-pairs-checks">
-                    <label><input type="checkbox" class="bt-pair-check" data-category="forex" value="EUR/USD" checked /> EUR/USD</label>
-                    <label><input type="checkbox" class="bt-pair-check" data-category="forex" value="GBP/USD" checked /> GBP/USD</label>
-                    <label><input type="checkbox" class="bt-pair-check" data-category="forex" value="GBP/CAD" checked /> GBP/CAD</label>
-                    <label><input type="checkbox" class="bt-pair-check" data-category="forex" value="USD/JPY" checked /> USD/JPY</label>
-                    <label><input type="checkbox" class="bt-pair-check" data-category="forex" value="EUR/GBP" checked /> EUR/GBP</label>
-                    <label><input type="checkbox" class="bt-pair-check" data-category="forex" value="AUD/USD" checked /> AUD/USD</label>
-                  </div>
-                </div>
-                <div class="pair-category-group">
-                  <div class="pair-category-header">
-                    <span>Indices</span>
-                    <label class="pair-select-all"><input type="checkbox" class="bt-pair-select-all" data-category="indices" /> Select all</label>
-                  </div>
-                  <div class="backtest-pairs-checks">
-                    <label><input type="checkbox" class="bt-pair-check" data-category="indices" value="US500" /> US500</label>
-                    <label><input type="checkbox" class="bt-pair-check" data-category="indices" value="NAS100" /> NAS100</label>
-                    <label><input type="checkbox" class="bt-pair-check" data-category="indices" value="GER40" /> GER40</label>
-                    <label><input type="checkbox" class="bt-pair-check" data-category="indices" value="UK100" /> UK100</label>
-                  </div>
-                </div>
-                <div class="pair-category-group">
-                  <div class="pair-category-header">
-                    <span>Commodities</span>
-                    <label class="pair-select-all"><input type="checkbox" class="bt-pair-select-all" data-category="commodities" /> Select all</label>
-                  </div>
-                  <div class="backtest-pairs-checks">
-                    <label><input type="checkbox" class="bt-pair-check" data-category="commodities" value="XAU/USD" /> Gold</label>
-                    <label><input type="checkbox" class="bt-pair-check" data-category="commodities" value="XAG/USD" /> Silver</label>
-                    <label><input type="checkbox" class="bt-pair-check" data-category="commodities" value="WTI/USD" /> WTI Oil</label>
-                    <label><input type="checkbox" class="bt-pair-check" data-category="commodities" value="BRENT/USD" /> Brent Oil</label>
-                    <label><input type="checkbox" class="bt-pair-check" data-category="commodities" value="NATGAS" /> Nat Gas</label>
-                    <label><input type="checkbox" class="bt-pair-check" data-category="commodities" value="COPPER" /> Copper</label>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="backtest-config-row">
               <label>Bot</label>
               <div class="custom-select" id="bt-bot-select">
                 <div class="custom-select-selected" data-value="">Loading bots…</div>
@@ -891,6 +838,17 @@
               </div>
               <input type="hidden" id="bt-bot-id" value="" />
               <input type="hidden" id="bt-bot-type" value="structure" />
+            </div>
+            <div class="backtest-config-row">
+              <div class="bt-settings-note" id="bt-pairs-summary" style="flex:1">Pairs (from bot): —</div>
+            </div>
+            <div class="backtest-config-row">
+              <label>From Date</label>
+              <input type="date" id="bt-from" />
+            </div>
+            <div class="backtest-config-row">
+              <label>To Date</label>
+              <input type="date" id="bt-to" />
             </div>
             <div class="backtest-config-row">
               <button id="bt-run-btn" class="bt-run-btn">▶ Run Backtest</button>
