@@ -2237,6 +2237,99 @@ function buildSettingFields(bot: any): string {
           <span style="font-size:10px;color:var(--muted)">require engulfing/hammer at retest</span>
         </div>
       </div>
+    </details>` : bot.type === 'fibonacci' ? `
+    <div class="bot-card-row">
+      <span class="bot-card-label">Min Reward</span>
+      <div class="bot-card-setting">
+        <input type="number" min="1" max="10" step="0.1"
+          value="${bot.settings.minReward ?? 1.5}"
+          data-bot-id="${bot.id}" data-key="minReward" />
+        <span style="font-size:10px;color:var(--muted)">:1 min achieved R:R</span>
+      </div>
+      <span class="bot-card-label" style="margin-left:12px">DXY Filter</span>
+      <div class="bot-card-setting" style="align-items:center;gap:6px">
+        <input type="checkbox"
+          ${bot.settings.useDxyFilter ? 'checked' : ''}
+          data-bot-id="${bot.id}" data-key="useDxyFilter" />
+        <span style="font-size:10px;color:var(--muted)">don't fight the dollar</span>
+      </div>
+    </div>${riskFields}
+    <details class="bot-card-advanced">
+      <summary>Advanced — setup tuning</summary>
+      <div class="bot-card-row">
+        <span class="bot-card-label">Pivot Lookback</span>
+        <div class="bot-card-setting">
+          <input type="number" min="1" max="10" step="1"
+            value="${bot.settings.pivotLookback ?? 3}"
+            data-bot-id="${bot.id}" data-key="pivotLookback" />
+          <span style="font-size:10px;color:var(--muted)">bars each side</span>
+        </div>
+        <span class="bot-card-label" style="margin-left:12px">Min Swing</span>
+        <div class="bot-card-setting">
+          <input type="number" min="0.5" max="10" step="0.1"
+            value="${bot.settings.minSwingATR ?? 2.0}"
+            data-bot-id="${bot.id}" data-key="minSwingATR" />
+          <span style="font-size:10px;color:var(--muted)">×ATR</span>
+        </div>
+      </div>
+      <div class="bot-card-row">
+        <span class="bot-card-label">Pocket</span>
+        <div class="bot-card-setting">
+          <input type="number" min="0" max="1" step="0.01"
+            value="${bot.settings.pocketLow ?? 0.5}"
+            data-bot-id="${bot.id}" data-key="pocketLow" />
+          <span style="font-size:10px;color:var(--muted)">to</span>
+          <input type="number" min="0" max="1" step="0.01"
+            value="${bot.settings.pocketHigh ?? 0.618}"
+            data-bot-id="${bot.id}" data-key="pocketHigh" />
+        </div>
+        <span class="bot-card-label" style="margin-left:12px">Invalidation</span>
+        <div class="bot-card-setting">
+          <input type="number" min="0" max="1" step="0.01"
+            value="${bot.settings.invalidationLevel ?? 0.786}"
+            data-bot-id="${bot.id}" data-key="invalidationLevel" />
+        </div>
+      </div>
+      <div class="bot-card-row">
+        <span class="bot-card-label">Stop Mode</span>
+        <div class="bot-card-setting">
+          <select class="small-select" data-bot-id="${bot.id}" data-key="stopMode">
+            <option value="beyond_invalidation" ${(bot.settings.stopMode ?? 'beyond_invalidation') === 'beyond_invalidation' ? 'selected' : ''}>Beyond invalidation</option>
+            <option value="beyond_swing_origin" ${bot.settings.stopMode === 'beyond_swing_origin' ? 'selected' : ''}>Beyond swing origin</option>
+          </select>
+        </div>
+        <span class="bot-card-label" style="margin-left:12px">Stop Buffer</span>
+        <div class="bot-card-setting">
+          <input type="number" min="0" max="2" step="0.05"
+            value="${bot.settings.stopBufferATR ?? 0.5}"
+            data-bot-id="${bot.id}" data-key="stopBufferATR" />
+          <span style="font-size:10px;color:var(--muted)">×ATR</span>
+        </div>
+      </div>
+      <div class="bot-card-row">
+        <span class="bot-card-label">Take Profit Mode</span>
+        <div class="bot-card-setting">
+          <select class="small-select" data-bot-id="${bot.id}" data-key="takeProfitMode">
+            <option value="prior_swing" ${(bot.settings.takeProfitMode ?? 'prior_swing') === 'prior_swing' ? 'selected' : ''}>Prior swing</option>
+            <option value="extension_1272" ${bot.settings.takeProfitMode === 'extension_1272' ? 'selected' : ''}>Fib extension 127.2%</option>
+            <option value="extension_1618" ${bot.settings.takeProfitMode === 'extension_1618' ? 'selected' : ''}>Fib extension 161.8%</option>
+            <option value="fixed_rr" ${bot.settings.takeProfitMode === 'fixed_rr' ? 'selected' : ''}>Fixed R:R</option>
+          </select>
+        </div>
+      </div>
+      <div class="bot-card-row">
+        <span class="bot-card-label">Require Close Inside Pocket</span>
+        <div class="bot-card-setting" style="align-items:center;gap:6px">
+          <input type="checkbox" ${bot.settings.requireCloseInsidePocket !== false ? 'checked' : ''}
+            data-bot-id="${bot.id}" data-key="requireCloseInsidePocket" />
+        </div>
+        <span class="bot-card-label" style="margin-left:12px">Concurrent w/ Trendline</span>
+        <div class="bot-card-setting" style="align-items:center;gap:6px">
+          <input type="checkbox" ${bot.settings.allowConcurrentWithTrendlineBot ? 'checked' : ''}
+            data-bot-id="${bot.id}" data-key="allowConcurrentWithTrendlineBot" />
+          <span style="font-size:10px;color:var(--muted)">allow same pair</span>
+        </div>
+      </div>
     </details>` : ''
 
   return settingFields

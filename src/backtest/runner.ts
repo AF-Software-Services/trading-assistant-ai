@@ -6,6 +6,8 @@ import { detectTrendlineSignal, getTradingSession } from "../engines/trendline.t
 import type { TrendlineTunables, TpMode, TradingSession } from "../engines/trendline.ts";
 import { detectStructureSignal } from "../engines/structure-signal.ts";
 import type { StructureTunables } from "../engines/structure-signal.ts";
+import { detectFibonacciSignal } from "../engines/fibonacci-signal.ts";
+import type { FibonacciTunables } from "../engines/fibonacci-signal.ts";
 import type { TradingService } from "../trading/service.ts";
 import { pipFactor, PIP_VALUE_GBP } from "../engines/pip-value.ts";
 
@@ -40,6 +42,20 @@ export interface StructureBacktestConfig {
   allowDuplicatePairs: boolean;
   tunables:             Partial<StructureTunables>;
   tpMode:               TpMode;
+  allowedSessions:      Record<TradingSession, boolean>;
+}
+
+export interface FibonacciBacktestConfig {
+  pairs: string[];
+  fromMs: number;
+  toMs: number;
+  accountBalance: number;
+  riskPercent: number;
+  rewardRisk: number;
+  minReward:            number;
+  maxOpenPositions:    number;
+  allowDuplicatePairs: boolean;
+  tunables:             Partial<FibonacciTunables>;
   allowedSessions:      Record<TradingSession, boolean>;
 }
 
@@ -569,6 +585,167 @@ export async function runStructureBacktest(
 
     const pairCount = allSignals.filter(s => s.pair === pair).length;
     progress(`${pair}: ${pairCount} structure signals`);
+  }
+
+  return { signals: allSignals, diagnostics: rejections, log };
+}
+
+export async function runFibonacciBacktest(
+  config: FibonacciBacktestConfig,
+  trading: TradingService,
+  onProgress?: (msg: string) => void,
+  kv?: KVNamespace,
+): Promise<BacktestResult> {
+  const allSignals: BotSignal[] = [];
+  const rejections: Record<string, number> = {};
+  const log: string[] = [];
+  const progress = (msg: string) => { log.push(msg); onProgress?.(msg); };
+
+  // Shared across all pairs — mirrors runTrendlineBacktest/runStructureBacktest's
+  // live-bot-matching constraints.
+  const openPositions: Array<{ pair: string; closeTime: number }> = [];
+  const lastSignalMs: Record<string, number> = {};
+  const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+
+  progress(`Fetching data for ${config.pairs.length} pairs…`);
+  const fetchResults = await Promise.all(config.pairs.map(async (pair) => {
+    try {
+      const { candles } = await fetchCandles(pair, "4H", config.toMs, trading, kv);
+      return { pair, candles4H: candles, error: null as string | null };
+    } catch (err) {
+      return { pair, candles4H: [] as Candle[], error: (err as Error).message };
+    }
+  }));
+
+  for (const { pair, candles4H, error } of fetchResults) {
+    if (error) {
+      progress(`Error fetching ${pair}: ${error}`);
+      continue;
+    }
+
+    progress(`${pair}: 4H=${candles4H.length} candles`);
+
+    const riskAmount = config.accountBalance * (config.riskPercent / 100);
+    const pipVal     = PIP_VALUE_GBP[pair] ?? 7.50;
+
+    const MIN_LOOKBACK = 50;
+
+    let periodStart = candles4H.findIndex(c => c.timestamp >= config.fromMs);
+    if (periodStart === -1) { progress(`${pair}: no candles in test period`); continue; }
+    let periodEnd = candles4H.length;
+    for (let k = periodStart; k < candles4H.length; k++) {
+      if (candles4H[k]!.timestamp > config.toMs) { periodEnd = k; break; }
+    }
+    const inPeriodCount = periodEnd - periodStart;
+    progress(`${pair}: ${inPeriodCount} 4H candles in test period`);
+
+    for (let i = 0; i < inPeriodCount; i++) {
+      if (i % 20 === 0 && i > 0) await new Promise(r => setTimeout(r, 0));
+
+      const absIdx = periodStart + i;
+      const history = candles4H.slice(Math.max(0, absIdx - 199), absIdx + 1);
+      if (history.length < MIN_LOOKBACK) {
+        rejections["insufficient_data"] = (rejections["insufficient_data"] ?? 0) + 1;
+        continue;
+      }
+
+      const cutoff = candles4H[absIdx]!.timestamp;
+
+      // ── Live-bot constraints (must match runBotScan exactly) ──────────────
+      for (let j = openPositions.length - 1; j >= 0; j--) {
+        if (openPositions[j]!.closeTime <= cutoff) openPositions.splice(j, 1);
+      }
+      if (!config.allowDuplicatePairs && openPositions.some(p => p.pair === pair)) {
+        rejections["position_open"] = (rejections["position_open"] ?? 0) + 1;
+        continue;
+      }
+      if (openPositions.length >= config.maxOpenPositions) {
+        rejections["max_positions"] = (rejections["max_positions"] ?? 0) + 1;
+        continue;
+      }
+      if (cutoff - (lastSignalMs[pair] ?? 0) < FOUR_HOURS_MS) {
+        rejections["cooldown"] = (rejections["cooldown"] ?? 0) + 1;
+        continue;
+      }
+
+      const sig = detectFibonacciSignal(history, config.rewardRisk, config.minReward, config.tunables);
+      if (!sig) {
+        rejections["no_signal"] = (rejections["no_signal"] ?? 0) + 1;
+        continue;
+      }
+
+      const confirmedHourUtc = new Date(sig.confirmedAt).getUTCHours();
+      if (!config.allowedSessions[getTradingSession(confirmedHourUtc)]) {
+        rejections["session_filter"] = (rejections["session_filter"] ?? 0) + 1;
+        continue;
+      }
+
+      const lots = calcLots(riskAmount, pair, sig.entryPrice, sig.stopLoss);
+      if (lots <= 0) continue;
+
+      const forwardCandles = candles4H.slice(absIdx + 1);
+      const outcomeResult = determineOutcome(
+        { pair, direction: sig.direction, entryPrice: sig.entryPrice, stopLoss: sig.stopLoss, takeProfit: sig.takeProfit },
+        forwardCandles,
+      );
+
+      openPositions.push({ pair, closeTime: outcomeResult.closeTime });
+      lastSignalMs[pair] = cutoff;
+
+      const pnlGbp = outcomeResult.pnlPips * lots * pipVal;
+
+      const signal: BotSignal = {
+        id:               crypto.randomUUID(),
+        botId:            "backtest-fibonacci",
+        pair:             pair as CurrencyPair,
+        direction:        sig.direction,
+        entryPrice:       sig.entryPrice,
+        stopLoss:         sig.stopLoss,
+        takeProfit:       sig.takeProfit,
+        lots,
+        score:            sig.score,
+        recommendationId: null,
+        reasons:          sig.reasons,
+        status:           "executed",
+        createdAt:        cutoff,
+        expiresAt:        cutoff + 4 * 60 * 60 * 1000,
+        executedAt:       cutoff,
+        ctraderPositionId: null,
+        journalId:        null,
+        rejectionReason:  null,
+        errorMessage:     null,
+        source:           "backtest",
+        backtestRunId:    null, // set by routes.ts
+        signalType:       "fibonacci_pullback",
+        signalTimeframe:  "4H",
+        signalConfidence: sig.score,
+        trend:            sig.direction === "buy" ? "bullish" : "bearish",
+        structure:        null,
+        mtfBias:          null,
+        mtfLabel:         null,
+        atr:              null,
+        inAoi:            false,
+        fibLabel:         sig.patternType,
+        tradeClass:       "fibonacci",
+        zoneType:         null,
+        patternType:      sig.patternType,
+        outcome:          outcomeResult.outcome,
+        closePrice:       +outcomeResult.closePrice.toFixed(5),
+        closeTime:        outcomeResult.closeTime,
+        pnlPips:          +outcomeResult.pnlPips.toFixed(1),
+        pnlGbp:           +pnlGbp.toFixed(2),
+        lineType:         null,
+        lineP1Ts:         null,
+        lineP2Ts:         null,
+        zoneLow:          sig.legOriginPrice,
+        zoneHigh:         sig.legExtremePrice,
+      };
+
+      allSignals.push(signal);
+    }
+
+    const pairCount = allSignals.filter(s => s.pair === pair).length;
+    progress(`${pair}: ${pairCount} fibonacci signals`);
   }
 
   return { signals: allSignals, diagnostics: rejections, log };
