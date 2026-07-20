@@ -2706,7 +2706,6 @@ function renderTestBotCard(bot: any): string {
         </div>
         <div class="bot-card-actions">
           <button class="test-bot-save-btn" data-bot-id="${bot.id}">Save</button>
-          <button class="test-bot-run-btn" data-bot-id="${bot.id}">▶ Use for Backtest</button>
           <button class="bot-card-delete-btn test-bot-delete-btn" data-bot-id="${bot.id}">Delete</button>
         </div>
       </div>
@@ -2769,13 +2768,6 @@ function attachTestBotCardEvents(botId: string, onChange: () => void): void {
       btn.textContent = '⚠ Error'
       setTimeout(() => { btn.textContent = 'Save' }, 2000)
     }
-  })
-
-  // Select this test bot in the backtest run picker
-  card.querySelector<HTMLButtonElement>('.test-bot-run-btn')?.addEventListener('click', (e) => {
-    e.stopPropagation()
-    selectBacktestBot(botId)
-    document.getElementById('backtest-config-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   })
 
   // Promote to live
@@ -2995,23 +2987,6 @@ async function loadBacktestBotSelector(): Promise<void> {
       optionsEl.classList.add('hidden')
     })
   })
-}
-
-// Programmatically picks a bot in the backtest run selector — used by a test bot card's
-// "Use for Backtest" button so it jumps straight to the run config already selected.
-function selectBacktestBot(botId: string): void {
-  const btSelect  = document.getElementById('bt-bot-select')
-  const btBotId   = document.getElementById('bt-bot-id')   as HTMLInputElement
-  const btBotType = document.getElementById('bt-bot-type') as HTMLInputElement
-  if (!btSelect) return
-  const opt = btSelect.querySelector<HTMLElement>(`.custom-select-option[data-value="${botId}"]`)
-  if (!opt) return
-  const selected = btSelect.querySelector('.custom-select-selected') as HTMLElement
-  btBotId.value   = botId
-  btBotType.value = opt.dataset.botType ?? 'trendline'
-  if (selected) { selected.textContent = opt.textContent?.trim() ?? ''; selected.dataset.value = botId }
-  btSelect.querySelectorAll('.custom-select-option').forEach(o => o.classList.remove('active'))
-  opt.classList.add('active')
 }
 
 let currentRunId: string | null = null
