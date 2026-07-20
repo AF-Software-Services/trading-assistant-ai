@@ -22,7 +22,10 @@ export const BOT_TYPE_REGISTRY: BotTypeDefinition[] = [
       minConfidenceScore: 60,
       minTouches:         2,
       riskPercent:        1.0,
-      rewardRisk:         3.0,
+      // 2:1 — matches what both live trendline bots were actually tuned to in practice;
+      // the original 3:1 default was never validated, just carried over from before
+      // rewardRisk became a per-bot setting.
+      rewardRisk:         2.0,
       // Trade-setup tuning — defaults match the values these were hardcoded to before
       // becoming per-bot settings. See src/engines/trendline.ts DEFAULT_TRENDLINE_TUNABLES.
       slBufferAtr:        0.1,
