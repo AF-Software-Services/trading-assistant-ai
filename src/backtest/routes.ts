@@ -72,7 +72,10 @@ export function createBacktestRouter() {
 
     await c.env.DB.prepare(
       `INSERT INTO backtest_runs (id, started_at, status, config_json) VALUES (?, ?, 'running', ?)`
-    ).bind(runId, startedAt, JSON.stringify(body)).run();
+    // botType is always derived from the bot record itself, never trusted from the request
+    // body — a caller (e.g. a direct API call bypassing the UI) omitting it silently produced
+    // a config_json with no botType, which broke every UI display that keys off cfg.botType.
+    ).bind(runId, startedAt, JSON.stringify({ ...body, botType: botInstance.type })).run();
 
     const runBacktest = async () => {
       try {
