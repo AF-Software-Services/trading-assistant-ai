@@ -36,6 +36,11 @@
             <option value="NATGAS">Natural Gas</option>
             <option value="COPPER">Copper</option>
           </optgroup>
+          <optgroup label="More Forex">
+            <option value="USD/CAD">USD/CAD</option>
+            <option value="USD/SEK">USD/SEK</option>
+            <option value="USD/CHF">USD/CHF</option>
+          </optgroup>
         </select>
       </div>
 
@@ -440,6 +445,7 @@
                   <select id="jf-pair">
                     <option>EUR/USD</option><option>GBP/USD</option><option>GBP/CAD</option>
                     <option>USD/JPY</option><option>EUR/GBP</option><option>AUD/USD</option>
+                    <option>USD/CAD</option><option>USD/SEK</option><option>USD/CHF</option>
                   </select>
                 </label>
                 <label>Direction
@@ -595,6 +601,7 @@
                   <select id="trade-pair">
                     <option>EUR/USD</option><option>GBP/USD</option><option>USD/JPY</option>
                     <option>AUD/USD</option><option>EUR/GBP</option><option>GBP/CAD</option>
+                    <option>USD/CAD</option><option>USD/SEK</option><option>USD/CHF</option>
                   </select>
                 </label>
                 <label id="trade-entry-label">Limit Price
@@ -789,6 +796,17 @@
                     <label><input type="checkbox" class="bot-new-pair" data-category="commodities" value="BRENT/USD" /> Brent Oil</label>
                     <label><input type="checkbox" class="bot-new-pair" data-category="commodities" value="NATGAS" /> Nat Gas</label>
                     <label><input type="checkbox" class="bot-new-pair" data-category="commodities" value="COPPER" /> Copper</label>
+                  </div>
+                </div>
+                <div class="pair-category-group">
+                  <div class="pair-category-header">
+                    <span>More Forex</span>
+                    <label class="pair-select-all"><input type="checkbox" class="bot-new-pair-select-all" data-category="more-forex" /> Select all</label>
+                  </div>
+                  <div class="modal-pair-checks">
+                    <label><input type="checkbox" class="bot-new-pair" data-category="more-forex" value="USD/CAD" /> USD/CAD</label>
+                    <label><input type="checkbox" class="bot-new-pair" data-category="more-forex" value="USD/SEK" /> USD/SEK</label>
+                    <label><input type="checkbox" class="bot-new-pair" data-category="more-forex" value="USD/CHF" /> USD/CHF</label>
                   </div>
                 </div>
               </div>
@@ -989,6 +1007,17 @@
                 <label><input type="checkbox" class="tb-new-pair" data-category="commodities" value="BRENT/USD" /> Brent Oil</label>
                 <label><input type="checkbox" class="tb-new-pair" data-category="commodities" value="NATGAS" /> Nat Gas</label>
                 <label><input type="checkbox" class="tb-new-pair" data-category="commodities" value="COPPER" /> Copper</label>
+              </div>
+            </div>
+            <div class="pair-category-group">
+              <div class="pair-category-header">
+                <span>More Forex</span>
+                <label class="pair-select-all"><input type="checkbox" class="tb-new-pair-select-all" data-category="more-forex" /> Select all</label>
+              </div>
+              <div class="modal-pair-checks">
+                <label><input type="checkbox" class="tb-new-pair" data-category="more-forex" value="USD/CAD" /> USD/CAD</label>
+                <label><input type="checkbox" class="tb-new-pair" data-category="more-forex" value="USD/SEK" /> USD/SEK</label>
+                <label><input type="checkbox" class="tb-new-pair" data-category="more-forex" value="USD/CHF" /> USD/CHF</label>
               </div>
             </div>
           </div>

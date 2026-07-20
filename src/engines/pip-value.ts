@@ -19,6 +19,13 @@ export const PIP_SIZE: Record<CurrencyPair, number> = {
   "BRENT/USD": 0.01,
   "NATGAS":    0.001,
   "COPPER":    0.0001,
+  // Added for the DXY synthetic-index formula — standard 4-decimal forex quote precision
+  // assumed (matches every other non-JPY major above); not yet confirmed against the
+  // broker's real digits field the way the other instruments were (see client.ts's digits
+  // fetch). Verify before enabling live trading on these, same as the JPY/indices fix.
+  "USD/CAD":   0.0001,
+  "USD/SEK":   0.0001,
+  "USD/CHF":   0.0001,
 };
 
 export function pipFactor(pair: string): number {
@@ -52,4 +59,12 @@ export const PIP_VALUE_GBP: Record<string, number> = {
   "BRENT/USD": 0.78,  // 100 barrels/lot × $0.01 pip ≈ $1/pip
   "NATGAS":    7.80,  // 10,000 MMBtu/lot × $0.001 pip ≈ $10/pip
   "COPPER":    0.16,  // 2000 lbs/lot × $0.0001 pip ≈ $0.20/pip
+  // Added for the DXY synthetic-index formula. Pip value is in the quote currency
+  // (CAD/SEK/CHF), converted to GBP at an approximate cross-rate — same order of
+  // approximation as the rest of this table, but NOT yet confirmed the way the others were
+  // (2026-07-18 verification pass didn't cover these). Treat as a rough placeholder; verify
+  // real cross-rates before relying on these for live position sizing.
+  "USD/CAD":   5.50,  // 100,000/lot × 0.0001 = 10 CAD/pip, ≈ £5.50 at ~1.82 CAD/GBP
+  "USD/SEK":   0.75,  // 100,000/lot × 0.0001 = 10 SEK/pip, ≈ £0.75 at ~13.5 SEK/GBP
+  "USD/CHF":   8.50,  // 100,000/lot × 0.0001 = 10 CHF/pip, ≈ £8.50 at ~1.15 CHF/GBP
 };

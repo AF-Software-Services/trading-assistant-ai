@@ -2043,9 +2043,17 @@ function updateBotRiskDisplay(): void {
 }
 
 const PAIR_CATEGORIES: Record<string, string[]> = {
+  // Empty pairs falls back to exactly this list in the live engine (bot/engine.ts's
+  // PHASE1_PAIRS) — the pill-highlighting logic below relies on that match, so don't add
+  // to this array without also updating PHASE1_PAIRS, or the display will silently lie
+  // about what the bot actually scans (this happened once already this session).
   Forex:       ['EUR/USD', 'GBP/USD', 'GBP/CAD', 'USD/JPY', 'EUR/GBP', 'AUD/USD'],
   Indices:     ['US500', 'NAS100', 'GER40', 'UK100'],
   Commodities: ['XAU/USD', 'XAG/USD', 'WTI/USD', 'BRENT/USD', 'NATGAS', 'COPPER'],
+  // Added for the DXY synthetic-index formula — tradeable like any other pair, but NOT
+  // part of the "empty pairs = forex fallback" convention (a bot must explicitly select
+  // these to trade them).
+  'More Forex': ['USD/CAD', 'USD/SEK', 'USD/CHF'],
 }
 const ALL_PAIRS = Object.values(PAIR_CATEGORIES).flat()
 
