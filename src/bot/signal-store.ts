@@ -56,6 +56,10 @@ export interface BotSignal {
   lineType:           'resistance' | 'support' | null;
   lineP1Ts:           number | null;
   lineP2Ts:           number | null;
+  // The Area of Interest bounds a structure-bot signal was based on. Null for non-structure
+  // signal types — mirrors lineType/lineP1Ts/lineP2Ts's "null for other signal types" pattern.
+  zoneLow:            number | null;
+  zoneHigh:           number | null;
 }
 
 // ── KV helpers ────────────────────────────────────────────────────────────────
@@ -93,14 +97,14 @@ export async function saveBotSignal(db: D1Database, signal: BotSignal): Promise<
         trend, structure, mtf_bias, mtf_label, atr, in_aoi,
         fib_label, trade_class, zone_type, pattern_type,
         outcome, close_price, close_time, pnl_pips, pnl_gbp,
-        line_type, line_p1_ts, line_p2_ts)
+        line_type, line_p1_ts, line_p2_ts, zone_low, zone_high)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
              ?, ?,
              ?, ?, ?,
              ?, ?, ?, ?, ?, ?,
              ?, ?, ?, ?,
              ?, ?, ?, ?, ?,
-             ?, ?, ?)
+             ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        status               = excluded.status,
        executed_at          = excluded.executed_at,
@@ -149,6 +153,8 @@ export async function saveBotSignal(db: D1Database, signal: BotSignal): Promise<
     signal.lineType ?? null,
     signal.lineP1Ts ?? null,
     signal.lineP2Ts ?? null,
+    signal.zoneLow ?? null,
+    signal.zoneHigh ?? null,
   ).run();
 }
 
@@ -294,5 +300,7 @@ function rowToSignal(row: Record<string, unknown>): BotSignal {
     lineType:          (row["line_type"]           as 'resistance' | 'support' | null) ?? null,
     lineP1Ts:          (row["line_p1_ts"]          as number | null) ?? null,
     lineP2Ts:          (row["line_p2_ts"]          as number | null) ?? null,
+    zoneLow:           (row["zone_low"]            as number | null) ?? null,
+    zoneHigh:          (row["zone_high"]           as number | null) ?? null,
   };
 }

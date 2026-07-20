@@ -5,6 +5,7 @@ import { createMarketDataProvider }        from "../providers/factory.ts";
 import { pipFactor, PIP_VALUE_GBP }        from "../engines/pip-value.ts";
 import { detectTrendlineSignal, pickTrendlineTunables, getTradingSession } from "../engines/trendline.ts";
 import type { TradingSession }             from "../engines/trendline.ts";
+import { detectStructureSignal, pickStructureTunables } from "../engines/structure-signal.ts";
 import { storeTrendlineTrailState }        from "./monitor.ts";
 import { TradingService }                  from "../trading/service.ts";
 import { getAccount, updateAccountBalance, getPrimaryAccountBalance } from "../ctrader/account-types.ts";
@@ -48,17 +49,23 @@ export function calcLots(riskAmountGBP: number, pair: string, entryPrice: number
 
 // ── Execute a signal via cTrader ──────────────────────────────────────────────
 
+// orderType "limit" (default) matches trendline's retest entries, which anticipate price
+// reaching signal.entryPrice. "market" is for signals that already confirm price is there
+// right now (e.g. the structure bot's zone-bounce entries) — a limit order at a stale
+// snapshot price would either fill immediately anyway or, worse, sit and wait for a pullback
+// the strategy never intended.
 export async function executeSignal(
   signal:  BotSignal,
   db:      D1Database,
   kv:      KVNamespace,
   trading: TradingService,
+  orderType: "market" | "limit" = "limit",
 ): Promise<void> {
   const { orderId } = await trading.placeOrder({
     pair:       signal.pair,
     direction:  signal.direction,
     lots:       signal.lots,
-    limitPrice: signal.entryPrice,
+    ...(orderType === "limit" ? { limitPrice: signal.entryPrice } : {}),
     stopLoss:   signal.stopLoss,
     takeProfit: signal.takeProfit,
   });
@@ -167,6 +174,7 @@ export async function runBotScan(env: {
   const swingLookback = (env.botInstance?.settings["swingLookback"] as number | undefined) ?? 5;
   const tpMode = ((env.botInstance?.settings["tpMode"] as string | undefined) === "atLevel" ? "atLevel" : "rr") as "rr" | "atLevel";
   const requireCandleConfirmation = env.botInstance?.settings["requireCandleConfirmation"] === true;
+  const structureTunables = env.botInstance ? pickStructureTunables(env.botInstance.settings) : {};
   const allowedSessions: Record<TradingSession, boolean> = {
     asian:  env.botInstance?.settings["allowAsianSession"]  !== false,
     london: env.botInstance?.settings["allowLondonSession"] !== false,
@@ -289,6 +297,7 @@ export async function runBotScan(env: {
               lineType: tlNoBias.actionLine.type,
               lineP1Ts: candles4H[tlNoBias.actionLine.p1Index]!.timestamp,
               lineP2Ts: candles4H[tlNoBias.actionLine.p2Index]!.timestamp,
+              zoneLow: null, zoneHigh: null,
             });
           }
           continue;
@@ -352,6 +361,8 @@ export async function runBotScan(env: {
           lineType,
           lineP1Ts,
           lineP2Ts,
+          zoneLow: null,
+          zoneHigh: null,
         };
 
         if (mode === "approval") {
@@ -361,7 +372,7 @@ export async function runBotScan(env: {
           try {
             if (!trading) throw new Error("No cTrader token");
             await saveBotSignal(env.DB, signal);
-            await executeSignal(signal, env.DB, env.KV, trading);
+            await executeSignal(signal, env.DB, env.KV, trading, "limit");
             await storeTrendlineTrailState(env.KV, signal.id, tlSig.safetyLine, Date.now(), signal.stopLoss);
             openCount++;
             openPositionPairs.add(pair);
@@ -371,6 +382,93 @@ export async function runBotScan(env: {
             await updateBotSignalStatus(env.DB, signal.id, "failed", { errorMessage: msg });
             result.signalsFailed++;
             result.errors.push(`${pair} ${tlSig.direction}: ${msg}`);
+          }
+        }
+
+        continue;
+      }
+
+      if (botType === "structure") {
+        const [candlesW, candlesD, candles4H] = await Promise.all([
+          provider.getCandles(pair, "W", 60),
+          provider.getCandles(pair, "D", 90),
+          provider.getCandles(pair, "4H", 200),
+        ]);
+        const stSig = detectStructureSignal(candlesW, candlesD, candles4H, rrRatio, minConfluence, structureTunables, tpMode);
+        if (!stSig) continue;
+        if (stSig.score < minConfidenceScore) continue;
+
+        const confirmedHourUtc = new Date(stSig.confirmedAt).getUTCHours();
+        if (!allowedSessions[getTradingSession(confirmedHourUtc)]) continue;
+
+        result.signalsFound++;
+
+        const lots = calcLots(riskAmount, pair, stSig.entryPrice, stSig.stopLoss);
+        if (lots <= 0) continue;
+
+        const signal: BotSignal = {
+          id:               crypto.randomUUID(),
+          botId,
+          pair,
+          direction:        stSig.direction,
+          entryPrice:       stSig.entryPrice,
+          stopLoss:         stSig.stopLoss,
+          takeProfit:       stSig.takeProfit,
+          lots,
+          score:            stSig.score,
+          recommendationId: null,
+          reasons:          stSig.reasons,
+          status:           "pending",
+          createdAt:        Date.now(),
+          expiresAt:        Date.now() + 4 * 60 * 60 * 1000,
+          executedAt:       null,
+          ctraderPositionId: null,
+          journalId:        null,
+          rejectionReason:  null,
+          errorMessage:     null,
+          source:           'live',
+          backtestRunId:    null,
+          signalType:       "structure_zone_bounce",
+          signalTimeframe:  "4H",
+          signalConfidence: stSig.score,
+          trend:            stSig.direction === "buy" ? "bullish" : "bearish",
+          structure:        null,
+          mtfBias:          null,
+          mtfLabel:         null,
+          atr:              null,
+          inAoi:            true,
+          fibLabel:         null,
+          tradeClass:       "structure",
+          zoneType:         stSig.zoneType,
+          patternType:      stSig.patternType,
+          outcome:          null,
+          closePrice:       null,
+          closeTime:        null,
+          pnlPips:          null,
+          pnlGbp:           null,
+          lineType:         null,
+          lineP1Ts:         null,
+          lineP2Ts:         null,
+          zoneLow:          stSig.zoneLow,
+          zoneHigh:         stSig.zoneHigh,
+        };
+
+        if (mode === "approval") {
+          await saveBotSignal(env.DB, signal);
+          result.signalsQueued++;
+        } else {
+          try {
+            if (!trading) throw new Error("No cTrader token");
+            await saveBotSignal(env.DB, signal);
+            await executeSignal(signal, env.DB, env.KV, trading, "market");
+            openCount++;
+            openPositionPairs.add(pair);
+            result.signalsExecuted++;
+          } catch (e) {
+            const msg = (e as Error).message;
+            await updateBotSignalStatus(env.DB, signal.id, "failed", { errorMessage: msg });
+            result.signalsFailed++;
+            result.errors.push(`${pair} ${stSig.direction}: ${msg}`);
           }
         }
 

@@ -2123,7 +2123,7 @@ function initBot(): void {
 
   // ── Render bot cards ───────────────────────────────────────────────────────
   function renderBotCard(bot: any): string {
-    const typeClass = bot.type === 'trendline' ? 'trendline' : ''
+    const typeClass = bot.type === 'trendline' ? 'trendline' : bot.type === 'structure' ? 'structure' : ''
     const pairPills = Object.entries(PAIR_CATEGORIES).map(([category, pairs]) => {
       const pills = pairs.map(p => {
         // Empty pairs falls back to forex-only in the backend scan (bot/engine.ts), not all 16 —
@@ -2707,7 +2707,7 @@ async function loadBacktestBotSelector(): Promise<void> {
   // Build options
   optionsEl.innerHTML = bots.map((b, i) =>
     `<div class="custom-select-option ${i === 0 ? 'active' : ''}" data-value="${b.id}" data-bot-type="${b.type}">
-      ${b.name} — Trendline break + retest
+      ${b.name} — ${b.type === 'structure' ? 'S/R zone bounce' : 'Trendline break + retest'}
     </div>`
   ).join('')
 
@@ -2870,11 +2870,10 @@ function renderBacktestResults(run: any): void {
   `).join('')
 
   const cfg = run.config ?? {}
-  const strategyLabel = 'Trendline Bot'
+  const trades: any[] = run.trades ?? []
+  const strategyLabel = trades.some((t: any) => t.trade_class === 'structure') ? 'Structure Bot' : 'Trendline Bot'
   ;(document.getElementById('bt-results-title') as HTMLElement).textContent =
     `Results — ${strategyLabel} — ${(cfg.pairs ?? []).join(', ')} — ${safeDate(cfg.fromMs)} to ${safeDate(cfg.toMs)}`
-
-  const trades: any[] = run.trades ?? []
 
   // Separate executed trades from ML-only rejected signals
   const executedTrades = trades.filter((t: any) => t.status === 'executed')
