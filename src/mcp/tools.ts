@@ -4,6 +4,7 @@ import type { CurrencyPair, Timeframe } from "../types/market.ts";
 import { ALL_TRADEABLE_PAIRS } from "../types/market.ts";
 import { createMarketDataProvider } from "../providers/factory.ts";
 import { calculateATR } from "../engines/trend.ts";
+import { pipFactor } from "../engines/pip-value.ts";
 import { detectTrendlineSignal, getDailyBias, detectTrendlineOverlays } from "../engines/trendline.ts";
 import { fetchNewsForPair } from "../providers/news.ts";
 import {
@@ -18,6 +19,7 @@ import {
   updateBotSignalStatus,
   executeSignal,
   runBotScan,
+  calcLots,
 } from "../bot/engine.ts";
 import { listBots, updateBot } from "../bot/bot-types.ts";
 import type { BotInstance } from "../bot/bot-types.ts";
@@ -88,7 +90,7 @@ export function registerTools(server: McpServer, env: Env): void {
       const tlOverlays = detectTrendlineOverlays(candles4H);
 
       const lots = tlSignal && riskAmount
-        ? Math.floor((riskAmount / (Math.abs(tlSignal.entryPrice - tlSignal.stopLoss) * (pair.includes("JPY") ? 1000 : 100000))) * 100) / 100
+        ? calcLots(riskAmount, pair, tlSignal.entryPrice, tlSignal.stopLoss)
         : null;
 
       const status = tlSignal
@@ -339,9 +341,8 @@ export function registerTools(server: McpServer, env: Env): void {
         createdAt: Date.now(),
       });
 
-      const pipFactor = pair.includes("JPY") ? 100 : 10000;
-      const stopPipsCalc = Math.abs(entryPrice - stopLoss) * pipFactor;
-      const tpPipsCalc   = Math.abs(target - entryPrice)  * pipFactor;
+      const stopPipsCalc = Math.abs(entryPrice - stopLoss) * pipFactor(pair);
+      const tpPipsCalc   = Math.abs(target - entryPrice)  * pipFactor(pair);
       const rr           = stopPipsCalc > 0 ? tpPipsCalc / stopPipsCalc : 0;
 
       return text(
@@ -573,9 +574,8 @@ export function registerTools(server: McpServer, env: Env): void {
       try {
         await executeSignal(signal, env.DB, env.KV, trading);
 
-        const pipFactor = signal.pair.includes("JPY") ? 100 : 10000;
-        const stopPips  = Math.abs(signal.entryPrice - signal.stopLoss) * pipFactor;
-        const tpPips    = Math.abs(signal.takeProfit - signal.entryPrice) * pipFactor;
+        const stopPips  = Math.abs(signal.entryPrice - signal.stopLoss) * pipFactor(signal.pair);
+        const tpPips    = Math.abs(signal.takeProfit - signal.entryPrice) * pipFactor(signal.pair);
         const rr        = stopPips > 0 ? tpPips / stopPips : 0;
 
         return text(
