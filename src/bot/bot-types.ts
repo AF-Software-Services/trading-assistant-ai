@@ -85,13 +85,20 @@ export interface BotInstance {
   settings:   Record<string, unknown>;
   accountId:  string | null;     // null = no account assigned
   createdAt:  number;
+  // Test bots are full bot configs used for backtesting only — hidden from the live Bot
+  // tab and cron/monitor by default (see listBots's includeTest option), with a manually
+  // set startingBalance instead of a real account's balance. Promoting one to a real live
+  // bot is just assigning a real accountId and flipping isTest back to false in place.
+  isTest:           boolean;
+  startingBalance:  number | null;
 }
 
 // ── D1 helpers ────────────────────────────────────────────────────────────────
 
-export async function listBots(db: D1Database): Promise<BotInstance[]> {
+export async function listBots(db: D1Database, opts: { includeTest?: boolean } = {}): Promise<BotInstance[]> {
+  const where = opts.includeTest ? '' : 'WHERE is_test = 0';
   const rows = await db.prepare(
-    `SELECT * FROM bots ORDER BY created_at ASC`
+    `SELECT * FROM bots ${where} ORDER BY created_at ASC`
   ).all<Record<string, unknown>>();
   return rows.results.map(rowToBot);
 }
@@ -106,8 +113,8 @@ export async function getBot(db: D1Database, id: string): Promise<BotInstance | 
 export async function createBot(db: D1Database, bot: Omit<BotInstance, "createdAt">): Promise<BotInstance> {
   const now = Date.now();
   await db.prepare(
-    `INSERT INTO bots (id, name, type, mode, pairs_json, settings_json, account_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO bots (id, name, type, mode, pairs_json, settings_json, account_id, created_at, is_test, starting_balance)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     bot.id,
     bot.name,
@@ -117,6 +124,8 @@ export async function createBot(db: D1Database, bot: Omit<BotInstance, "createdA
     JSON.stringify(bot.settings),
     bot.accountId ?? null,
     now,
+    bot.isTest ? 1 : 0,
+    bot.startingBalance ?? null,
   ).run();
   return { ...bot, createdAt: now };
 }
@@ -124,28 +133,32 @@ export async function createBot(db: D1Database, bot: Omit<BotInstance, "createdA
 export async function updateBot(
   db: D1Database,
   id: string,
-  patch: Partial<Pick<BotInstance, "name" | "mode" | "pairs" | "settings" | "accountId">>
+  patch: Partial<Pick<BotInstance, "name" | "mode" | "pairs" | "settings" | "accountId" | "isTest" | "startingBalance">>
 ): Promise<BotInstance | null> {
   const existing = await getBot(db, id);
   if (!existing) return null;
 
   const updated: BotInstance = {
     ...existing,
-    ...(patch.name      !== undefined ? { name:      patch.name }                                    : {}),
-    ...(patch.mode      !== undefined ? { mode:      patch.mode }                                    : {}),
-    ...(patch.pairs     !== undefined ? { pairs:     patch.pairs }                                   : {}),
-    ...(patch.settings  !== undefined ? { settings:  { ...existing.settings, ...patch.settings } }   : {}),
-    ...(patch.accountId !== undefined ? { accountId: patch.accountId }                               : {}),
+    ...(patch.name            !== undefined ? { name:            patch.name }                              : {}),
+    ...(patch.mode            !== undefined ? { mode:            patch.mode }                              : {}),
+    ...(patch.pairs           !== undefined ? { pairs:           patch.pairs }                             : {}),
+    ...(patch.settings        !== undefined ? { settings:        { ...existing.settings, ...patch.settings } } : {}),
+    ...(patch.accountId       !== undefined ? { accountId:       patch.accountId }                         : {}),
+    ...(patch.isTest          !== undefined ? { isTest:          patch.isTest }                            : {}),
+    ...(patch.startingBalance !== undefined ? { startingBalance: patch.startingBalance }                   : {}),
   };
 
   await db.prepare(
-    `UPDATE bots SET name = ?, mode = ?, pairs_json = ?, settings_json = ?, account_id = ? WHERE id = ?`
+    `UPDATE bots SET name = ?, mode = ?, pairs_json = ?, settings_json = ?, account_id = ?, is_test = ?, starting_balance = ? WHERE id = ?`
   ).bind(
     updated.name,
     updated.mode,
     JSON.stringify(updated.pairs),
     JSON.stringify(updated.settings),
     updated.accountId ?? null,
+    updated.isTest ? 1 : 0,
+    updated.startingBalance ?? null,
     id,
   ).run();
 
@@ -167,6 +180,8 @@ function rowToBot(row: Record<string, unknown>): BotInstance {
     settings:  JSON.parse(row["settings_json"] as string) as Record<string, unknown>,
     accountId: (row["account_id"] as string | null) ?? null,
     createdAt: row["created_at"] as number,
+    isTest:          !!(row["is_test"] as number | null),
+    startingBalance: (row["starting_balance"] as number | null) ?? null,
   };
 }
 
@@ -189,6 +204,8 @@ export async function seedBotsFromLegacyKV(
     mode:      (legacy?.mode as BotInstance["mode"]) ?? "off",
     pairs:     (legacy?.pairs as CurrencyPair[]) ?? [],
     accountId: null,
+    isTest:    false,
+    startingBalance: null,
     settings: {
       ...getBotTypeDefinition("trendline")!.defaultSettings,
       minConfidenceScore: (legacy?.minConfidenceScore as number) ?? 60,

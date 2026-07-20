@@ -30,8 +30,12 @@ export function createBacktestRouter() {
 
     // Starting capital is the bot's own linked account's real cTrader balance — falls back to
     // any other connected account's balance, then a safe placeholder if nothing is connected yet.
+    // Test bots have no real account (accountId is always null) — use their manually-set
+    // starting balance instead of falling through to some other account's real balance.
     const botAccount = botInstance.accountId ? await getAccount(c.env.DB, botInstance.accountId) : null;
-    const accountBalance = botAccount?.balance ?? await getPrimaryAccountBalance(c.env.DB) ?? 1000;
+    const accountBalance = botInstance.isTest
+      ? (botInstance.startingBalance ?? 1000)
+      : botAccount?.balance ?? await getPrimaryAccountBalance(c.env.DB) ?? 1000;
 
     // Execution constraints come from the bot with no fallback — must match the live run exactly.
     // Sizing params (riskPercent, rewardRisk) fall back to global risk settings for bots that

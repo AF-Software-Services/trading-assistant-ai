@@ -45,17 +45,20 @@ export function createBotRouter() {
   // ── GET /api/v1/bot/bots ──────────────────────────────────────────────────────
   app.get("/bots", async (c) => {
     await seedBotsFromLegacyKV(c.env.DB, c.env.KV);
-    const bots = await listBots(c.env.DB);
+    const includeTest = c.req.query("includeTest") === "true";
+    const bots = await listBots(c.env.DB, { includeTest });
     return c.json(bots);
   });
 
   // ── POST /api/v1/bot/bots ─────────────────────────────────────────────────────
   app.post("/bots", async (c) => {
     const body = await c.req.json<{
-      name?:      string;
-      type?:      string;
-      pairs?:     string[];
-      accountId?: string | null;
+      name?:            string;
+      type?:            string;
+      pairs?:           string[];
+      accountId?:       string | null;
+      isTest?:          boolean;
+      startingBalance?: number;
     }>().catch(() => null);
     if (!body?.type) return c.json({ error: "type is required" }, 400);
 
@@ -66,14 +69,19 @@ export function createBotRouter() {
       PHASE1_PAIRS.includes(p as CurrencyPair)
     ) as CurrencyPair[];
 
+    const isTest = body.isTest === true;
+
     const bot = await createBot(c.env.DB, {
       id:        crypto.randomUUID(),
       name:      body.name ?? typeDef.displayName,
       type:      typeDef.id as BotTypeId,
       mode:      "off",
       pairs,
-      accountId: body.accountId ?? null,
+      // Test bots never start with a real account — that's what promoting one is for.
+      accountId: isTest ? null : (body.accountId ?? null),
       settings:  { ...typeDef.defaultSettings },
+      isTest,
+      startingBalance: isTest ? (body.startingBalance ?? 1000) : null,
     });
 
     return c.json(bot, 201);
@@ -90,11 +98,13 @@ export function createBotRouter() {
     }
 
     const updated = await updateBot(c.env.DB, id, {
-      name:      body.name,
-      mode:      body.mode,
-      pairs:     body.pairs,
-      settings:  body.settings,
-      accountId: body.accountId,
+      name:            body.name,
+      mode:            body.mode,
+      pairs:           body.pairs,
+      settings:        body.settings,
+      accountId:       body.accountId,
+      isTest:          body.isTest,
+      startingBalance: body.startingBalance,
     });
 
     if (!updated) return c.json({ error: "Bot not found" }, 404);

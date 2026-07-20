@@ -812,8 +812,18 @@
       <div id="tab-backtest" class="tab-panel hidden">
         <div class="data-panel backtest-panel">
 
-          <!-- Config -->
+          <!-- Test Bots -->
           <div class="data-panel-header">
+            <span>Test Bots</span>
+            <button id="test-bot-add-btn" class="small-btn">+ Create Test Bot</button>
+          </div>
+          <div class="bt-settings-note">
+            Full bot configs used for backtesting only — never shown in the live Bot tab. Give one a starting balance, tune its settings, and run a backtest against it. Once it proves itself, promote it to a real live bot with a real account.
+          </div>
+          <div id="test-bot-list" style="margin-bottom:24px"></div>
+
+          <!-- Config -->
+          <div class="data-panel-header" id="backtest-config-panel">
             <span>Backtest Configuration</span>
           </div>
           <div class="backtest-config">
@@ -948,6 +958,81 @@
       </div>
 
     </main>
+
+    <!-- Add Test Bot modal -->
+    <div id="test-bot-add-modal" class="modal-overlay hidden">
+      <div class="modal-box">
+        <div class="modal-title">Create Test Bot</div>
+        <div class="modal-field">
+          <label>Name</label>
+          <input type="text" id="tb-new-name" placeholder="e.g. Structure Bot — tight SL variant" />
+        </div>
+        <div class="modal-field">
+          <label>Type</label>
+          <div class="custom-select" id="tb-type-select">
+            <div class="custom-select-selected" data-value="trendline">Trendline Bot — trendline break + retest</div>
+            <div class="custom-select-options hidden">
+              <div class="custom-select-option active" data-value="trendline">Trendline Bot — trendline break + retest</div>
+              <div class="custom-select-option" data-value="structure">Structure Bot — S/R zone bounce + candlestick confirmation</div>
+            </div>
+          </div>
+          <input type="hidden" id="tb-new-type" value="trendline" />
+        </div>
+        <div class="modal-field">
+          <label>Pairs (leave all unchecked = all pairs)</label>
+          <div class="modal-pair-checks-grouped">
+            <div class="pair-category-group">
+              <div class="pair-category-header">
+                <span>Forex</span>
+                <label class="pair-select-all"><input type="checkbox" class="tb-new-pair-select-all" data-category="forex" /> Select all</label>
+              </div>
+              <div class="modal-pair-checks">
+                <label><input type="checkbox" class="tb-new-pair" data-category="forex" value="EUR/USD" /> EUR/USD</label>
+                <label><input type="checkbox" class="tb-new-pair" data-category="forex" value="GBP/USD" /> GBP/USD</label>
+                <label><input type="checkbox" class="tb-new-pair" data-category="forex" value="GBP/CAD" /> GBP/CAD</label>
+                <label><input type="checkbox" class="tb-new-pair" data-category="forex" value="USD/JPY" /> USD/JPY</label>
+                <label><input type="checkbox" class="tb-new-pair" data-category="forex" value="EUR/GBP" /> EUR/GBP</label>
+                <label><input type="checkbox" class="tb-new-pair" data-category="forex" value="AUD/USD" /> AUD/USD</label>
+              </div>
+            </div>
+            <div class="pair-category-group">
+              <div class="pair-category-header">
+                <span>Indices</span>
+                <label class="pair-select-all"><input type="checkbox" class="tb-new-pair-select-all" data-category="indices" /> Select all</label>
+              </div>
+              <div class="modal-pair-checks">
+                <label><input type="checkbox" class="tb-new-pair" data-category="indices" value="US500" /> US500</label>
+                <label><input type="checkbox" class="tb-new-pair" data-category="indices" value="NAS100" /> NAS100</label>
+                <label><input type="checkbox" class="tb-new-pair" data-category="indices" value="GER40" /> GER40</label>
+                <label><input type="checkbox" class="tb-new-pair" data-category="indices" value="UK100" /> UK100</label>
+              </div>
+            </div>
+            <div class="pair-category-group">
+              <div class="pair-category-header">
+                <span>Commodities</span>
+                <label class="pair-select-all"><input type="checkbox" class="tb-new-pair-select-all" data-category="commodities" /> Select all</label>
+              </div>
+              <div class="modal-pair-checks">
+                <label><input type="checkbox" class="tb-new-pair" data-category="commodities" value="XAU/USD" /> Gold</label>
+                <label><input type="checkbox" class="tb-new-pair" data-category="commodities" value="XAG/USD" /> Silver</label>
+                <label><input type="checkbox" class="tb-new-pair" data-category="commodities" value="WTI/USD" /> WTI Oil</label>
+                <label><input type="checkbox" class="tb-new-pair" data-category="commodities" value="BRENT/USD" /> Brent Oil</label>
+                <label><input type="checkbox" class="tb-new-pair" data-category="commodities" value="NATGAS" /> Nat Gas</label>
+                <label><input type="checkbox" class="tb-new-pair" data-category="commodities" value="COPPER" /> Copper</label>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-field">
+          <label>Starting Balance</label>
+          <input type="number" id="tb-new-balance" min="100" step="100" value="10000" style="width:100%;padding:6px" />
+        </div>
+        <div class="modal-actions">
+          <button id="tb-add-cancel-btn" class="small-btn">Cancel</button>
+          <button id="tb-add-confirm-btn" class="small-btn primary-btn">Create Test Bot</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Execute trade confirmation modal -->
     <div id="execute-modal" class="modal-backdrop hidden">
