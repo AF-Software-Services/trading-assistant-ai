@@ -9,6 +9,7 @@ import { detectAllSignals } from "../engines/candlestick.ts";
 import { detectAllPatterns } from "../engines/pattern.ts";
 import { analyseTrend, calculateATR } from "../engines/trend.ts";
 import { detectTrendlineOverlays } from "../engines/trendline.ts";
+import type { DxyFilterConfig } from "../engines/dxy-filter.ts";
 import { fetchNewsForPair } from "../providers/news.ts";
 import type { PairNews } from "../providers/news.ts";
 import {
@@ -303,6 +304,26 @@ export function createApiRouter(): Hono<{ Bindings: Env }> {
     const { accountBalance: _stale, ...rest } = existing;
     const updated = { ...rest, ...body };
     await c.env.KV.put("user:risk_settings", JSON.stringify(updated));
+    return c.json({ saved: true, settings: updated });
+  });
+
+  // ── GET/PUT /api/v1/settings/dxy-filter ─────────────────────────────────────
+  // The DXY filter's own master enable switch — separate from each bot's per-bot
+  // useDxyFilter setting, which is inert unless this master toggle is also on. Defaults to
+  // { enabled: false } (see dxy-filter.ts's DEFAULT_DXY_FILTER_CONFIG) until explicitly saved.
+  app.get("/settings/dxy-filter", async (c) => {
+    const settings = await c.env.KV.get("user:dxy_filter_settings", "json") as
+      Partial<DxyFilterConfig> | null;
+    return c.json(settings ?? {});
+  });
+
+  app.put("/settings/dxy-filter", async (c) => {
+    const body = await c.req.json<Partial<DxyFilterConfig>>().catch(() => null);
+    if (!body) return c.json({ error: "Invalid body" }, 400);
+    const existing = await c.env.KV.get("user:dxy_filter_settings", "json") as
+      Partial<DxyFilterConfig> | null ?? {};
+    const updated = { ...existing, ...body };
+    await c.env.KV.put("user:dxy_filter_settings", JSON.stringify(updated));
     return c.json({ saved: true, settings: updated });
   });
 

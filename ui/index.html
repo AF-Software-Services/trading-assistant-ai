@@ -700,6 +700,27 @@
       <!-- Bot tab -->
       <div id="tab-bot" class="tab-panel hidden">
 
+        <!-- DXY Regime Filter — shared, cross-bot master switch. Off by default; a bot's own
+             useDxyFilter setting is inert unless this is also on. -->
+        <div class="data-panel" style="margin-top:12px">
+          <div class="data-panel-header">
+            <span>DXY Regime Filter</span>
+          </div>
+          <div class="bot-card-row" style="padding:10px 12px">
+            <span class="bot-card-label">Enabled</span>
+            <div class="bot-card-setting" style="align-items:center;gap:6px">
+              <input type="checkbox" id="dxy-filter-enabled" />
+              <span style="font-size:10px;color:var(--muted)">don't fight the dollar — vetoes trades against the DXY regime</span>
+            </div>
+            <span class="bot-card-label" style="margin-left:12px">Max Net USD Exposure</span>
+            <div class="bot-card-setting">
+              <input type="number" min="0" step="100" id="dxy-filter-max-exposure" placeholder="uncapped" style="width:100px" />
+              <span style="font-size:10px;color:var(--muted)">£ GBP, blank = uncapped</span>
+            </div>
+            <span id="dxy-filter-status" style="font-size:11px;color:var(--muted);margin-left:12px"></span>
+          </div>
+        </div>
+
         <!-- Bot list -->
         <div class="data-panel" style="margin-top:12px">
           <div class="data-panel-header">
