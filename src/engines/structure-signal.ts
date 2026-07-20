@@ -136,6 +136,11 @@ export function detectStructureSignal(
   const buffer     = atr * t.slBufferAtr;
   const stopLoss   = wantBullish ? swingPoint - buffer : swingPoint + buffer;
 
+  // The AOI zone can be wide enough that price legitimately trades on the far side of the
+  // swing point that defines the stop — reject rather than emit a stop on the wrong side of
+  // entry (Math.abs() below only guards against a zero-distance stop, not a backwards one).
+  if (wantBullish ? stopLoss >= entryPrice : stopLoss <= entryPrice) return null;
+
   const riskDistance = Math.abs(entryPrice - stopLoss);
   if (riskDistance <= 0) return null;
 
