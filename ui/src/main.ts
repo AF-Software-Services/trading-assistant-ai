@@ -2896,6 +2896,21 @@ function initTestBotModal(): void {
 }
 
 // ── Backtest ───────────────────────────────────────────────────────────────
+// Bots fetched by loadBacktestBotSelector, keyed by id — a backtest run always uses the
+// selected bot's own `pairs` (same convention as live: empty means forex-only), so there's
+// no separate pair selection for the run itself.
+let backtestBotsCache: Record<string, any> = {}
+
+function resolveBacktestPairs(bot: any): string[] {
+  return (bot?.pairs?.length ?? 0) > 0 ? bot.pairs : PAIR_CATEGORIES.Forex
+}
+
+function updateBacktestPairsSummary(bot: any): void {
+  const el = document.getElementById('bt-pairs-summary')
+  if (!el || !bot) return
+  el.textContent = `Pairs (from bot): ${resolveBacktestPairs(bot).join(', ')}`
+}
+
 async function initBacktestTab(): Promise<void> {
   // Pre-fill dates: last 12 months
   const now = new Date()
@@ -2908,14 +2923,6 @@ async function initBacktestTab(): Promise<void> {
 
   document.getElementById('bt-run-btn')?.addEventListener('click', runBacktest)
 
-  // Per-category "select all" in the backtest pair checklist
-  document.querySelectorAll<HTMLInputElement>('.bt-pair-select-all').forEach(selectAll => {
-    selectAll.addEventListener('click', () => {
-      const category = selectAll.dataset.category
-      document.querySelectorAll<HTMLInputElement>(`.bt-pair-check[data-category="${category}"]`)
-        .forEach(c => { c.checked = selectAll.checked })
-    })
-  })
   document.getElementById('bt-refresh-runs')?.addEventListener('click', loadBacktestRuns)
   document.getElementById('bt-delete-btn')?.addEventListener('click', deleteCurrentRun)
   document.getElementById('bt-close-btn')?.addEventListener('click', () => {
@@ -2952,6 +2959,10 @@ async function loadBacktestBotSelector(): Promise<void> {
     return
   }
 
+  // Cache each bot's own pairs — the backtest runs against exactly what the bot is
+  // configured to trade, so there's no separate pair selection for the run itself.
+  backtestBotsCache = Object.fromEntries(bots.map(b => [b.id, b]))
+
   // Build options — test bots are included (backtests are exactly what they're for) and
   // clearly prefixed so they're never confused with a real live bot.
   optionsEl.innerHTML = bots.map((b, i) =>
@@ -2965,6 +2976,7 @@ async function loadBacktestBotSelector(): Promise<void> {
   if (selected) { selected.textContent = optionsEl.querySelector('.active')?.textContent?.trim() ?? first.name; selected.dataset.value = first.id }
   btBotId.value   = first.id
   btBotType.value = first.type
+  updateBacktestPairsSummary(first)
 
   // Wire dropdown
   selected?.addEventListener('click', () => optionsEl.classList.toggle('hidden'))
@@ -2977,6 +2989,7 @@ async function loadBacktestBotSelector(): Promise<void> {
       optionsEl.querySelectorAll('.custom-select-option').forEach(o => o.classList.remove('active'))
       el.classList.add('active')
       optionsEl.classList.add('hidden')
+      updateBacktestPairsSummary(backtestBotsCache[btBotId.value])
     })
   })
   document.addEventListener('click', e => {
@@ -2999,17 +3012,20 @@ function selectBacktestBot(botId: string): void {
   if (selected) { selected.textContent = opt.textContent?.trim() ?? ''; selected.dataset.value = botId }
   btSelect.querySelectorAll('.custom-select-option').forEach(o => o.classList.remove('active'))
   opt.classList.add('active')
+  updateBacktestPairsSummary(backtestBotsCache[botId])
 }
 
 let currentRunId: string | null = null
 
 async function runBacktest(): Promise<void> {
-  const pairs = Array.from(document.querySelectorAll<HTMLInputElement>('.bt-pair-check'))
-    .filter(c => c.checked).map(c => c.value)
-  if (pairs.length === 0) { alert('Select at least one pair'); return }
   const botId   = (document.getElementById('bt-bot-id')   as HTMLInputElement)?.value ?? ''
   const botType = (document.getElementById('bt-bot-type') as HTMLInputElement)?.value ?? 'structure'
   if (!botId) { alert('Select a bot to run the backtest with'); return }
+
+  // Always the selected bot's own pairs — same convention as live scanning, not a separate
+  // per-run selection (a bot's backtest should reflect exactly what it's configured to trade).
+  const pairs = resolveBacktestPairs(backtestBotsCache[botId])
+  if (pairs.length === 0) { alert('This bot has no pairs configured'); return }
 
   const fromMs = new Date((document.getElementById('bt-from') as HTMLInputElement).value + 'T00:00:00Z').getTime()
   const toMs   = new Date((document.getElementById('bt-to')   as HTMLInputElement).value + 'T23:59:59Z').getTime()
