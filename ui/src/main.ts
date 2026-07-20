@@ -2049,6 +2049,191 @@ const PAIR_CATEGORIES: Record<string, string[]> = {
 }
 const ALL_PAIRS = Object.values(PAIR_CATEGORIES).flat()
 
+// ── Shared bot-card building blocks (used by both live bot cards and test-bot cards) ──────
+function buildPairPills(bot: any): string {
+  return Object.entries(PAIR_CATEGORIES).map(([category, pairs]) => {
+    const pills = pairs.map(p => {
+      // Empty pairs falls back to forex-only in the backend scan (bot/engine.ts), not all 16 —
+      // mirror that here instead of highlighting every pill.
+      const active = bot.pairs.length === 0 ? PAIR_CATEGORIES.Forex.includes(p) : bot.pairs.includes(p)
+      return `<span class="bot-pair-pill ${active ? 'active' : ''}" data-pair="${p}" data-bot-id="${bot.id}">${p}</span>`
+    }).join('')
+    return `<div class="pair-category-group">
+      <div class="pair-category-header">
+        <span>${category}</span>
+        <button type="button" class="pair-category-select-all" data-category="${category}" data-bot-id="${bot.id}">Select all</button>
+      </div>
+      <div class="bot-card-pairs">${pills}</div>
+    </div>`
+  }).join('')
+}
+
+function buildSettingFields(bot: any): string {
+  const riskFields = `
+    <div class="bot-card-row">
+      <span class="bot-card-label">Risk %</span>
+      <div class="bot-card-setting">
+        <input type="number" min="0.1" max="10" step="0.1"
+          value="${bot.settings.riskPercent ?? 1.0}"
+          data-bot-id="${bot.id}" data-key="riskPercent" />
+        <span style="font-size:10px;color:var(--muted)">% per trade</span>
+      </div>
+      <span class="bot-card-label" style="margin-left:12px">R:R</span>
+      <div class="bot-card-setting">
+        <input type="number" min="1" max="10" step="0.5"
+          value="${bot.settings.rewardRisk ?? (bot.type === 'trendline' ? 3.0 : 2.5)}"
+          data-bot-id="${bot.id}" data-key="rewardRisk" />
+        <span style="font-size:10px;color:var(--muted)">:1</span>
+      </div>
+    </div>
+    <div class="bot-card-row">
+      <span class="bot-card-label">Max Positions</span>
+      <div class="bot-card-setting">
+        <input type="number" min="1" max="20" step="1"
+          value="${bot.settings.maxOpenPositions ?? 2}"
+          data-bot-id="${bot.id}" data-key="maxOpenPositions" />
+        <span style="font-size:10px;color:var(--muted)">concurrent</span>
+      </div>
+      <span class="bot-card-label" style="margin-left:12px">Allow Duplicates</span>
+      <div class="bot-card-setting" style="align-items:center;gap:6px">
+        <input type="checkbox"
+          ${bot.settings.allowDuplicatePairs ? 'checked' : ''}
+          data-bot-id="${bot.id}" data-key="allowDuplicatePairs" />
+        <span style="font-size:10px;color:var(--muted)">same pair twice</span>
+      </div>
+    </div>`
+
+  const settingFields = bot.type === 'structure' ? `
+    <div class="bot-card-row">
+      <span class="bot-card-label">Min Score</span>
+      <div class="bot-card-setting">
+        <input type="number" min="0" max="100" step="1"
+          value="${bot.settings.minConfidenceScore ?? 60}"
+          data-bot-id="${bot.id}" data-key="minConfidenceScore" />
+        <span style="font-size:10px;color:var(--muted)">%</span>
+      </div>
+      <span class="bot-card-label" style="margin-left:12px">Min Confluence</span>
+      <div class="bot-card-setting">
+        <input type="number" min="1" max="5" step="1"
+          value="${bot.settings.minConfluence ?? 2}"
+          data-bot-id="${bot.id}" data-key="minConfluence" />
+        <span style="font-size:10px;color:var(--muted)">S/R levels</span>
+      </div>
+    </div>${riskFields}` : bot.type === 'trendline' ? `
+    <div class="bot-card-row">
+      <span class="bot-card-label">Min Score</span>
+      <div class="bot-card-setting">
+        <input type="number" min="0" max="100" step="1"
+          value="${bot.settings.minConfidenceScore ?? 60}"
+          data-bot-id="${bot.id}" data-key="minConfidenceScore" />
+        <span style="font-size:10px;color:var(--muted)">%</span>
+      </div>
+      <span class="bot-card-label" style="margin-left:12px">Min Touches</span>
+      <div class="bot-card-setting">
+        <input type="number" min="2" max="10" step="1"
+          value="${bot.settings.minTouches ?? 2}"
+          data-bot-id="${bot.id}" data-key="minTouches" />
+      </div>
+    </div>${riskFields}
+    <details class="bot-card-advanced">
+      <summary>Advanced — setup tuning</summary>
+      <div class="bot-card-row">
+        <span class="bot-card-label">SL Buffer</span>
+        <div class="bot-card-setting">
+          <input type="number" min="0" max="2" step="0.05"
+            value="${bot.settings.slBufferAtr ?? 0.1}"
+            data-bot-id="${bot.id}" data-key="slBufferAtr" />
+          <span style="font-size:10px;color:var(--muted)">×ATR beyond line</span>
+        </div>
+        <span class="bot-card-label" style="margin-left:12px">Break Threshold</span>
+        <div class="bot-card-setting">
+          <input type="number" min="0.1" max="2" step="0.05"
+            value="${bot.settings.breakThresholdAtr ?? 0.5}"
+            data-bot-id="${bot.id}" data-key="breakThresholdAtr" />
+          <span style="font-size:10px;color:var(--muted)">×ATR</span>
+        </div>
+      </div>
+      <div class="bot-card-row">
+        <span class="bot-card-label">Retest Window</span>
+        <div class="bot-card-setting">
+          <input type="number" min="2" max="20" step="1"
+            value="${bot.settings.retestWindowBars ?? 6}"
+            data-bot-id="${bot.id}" data-key="retestWindowBars" />
+          <span style="font-size:10px;color:var(--muted)">bars</span>
+        </div>
+        <span class="bot-card-label" style="margin-left:12px">Retest Recency</span>
+        <div class="bot-card-setting">
+          <input type="number" min="1" max="20" step="1"
+            value="${bot.settings.retestRecencyBars ?? 3}"
+            data-bot-id="${bot.id}" data-key="retestRecencyBars" />
+          <span style="font-size:10px;color:var(--muted)">bars</span>
+        </div>
+      </div>
+      <div class="bot-card-row">
+        <span class="bot-card-label">Touch Tolerance</span>
+        <div class="bot-card-setting">
+          <input type="number" min="0.05" max="1" step="0.05"
+            value="${bot.settings.touchToleranceAtr ?? 0.3}"
+            data-bot-id="${bot.id}" data-key="touchToleranceAtr" />
+          <span style="font-size:10px;color:var(--muted)">×ATR</span>
+        </div>
+        <span class="bot-card-label" style="margin-left:12px">Min Stop Dist</span>
+        <div class="bot-card-setting">
+          <input type="number" min="0" max="1" step="0.05"
+            value="${bot.settings.minStopDistAtr ?? 0.2}"
+            data-bot-id="${bot.id}" data-key="minStopDistAtr" />
+          <span style="font-size:10px;color:var(--muted)">×ATR</span>
+        </div>
+      </div>
+      <div class="bot-card-row">
+        <span class="bot-card-label">Swing Lookback</span>
+        <div class="bot-card-setting">
+          <input type="number" min="2" max="20" step="1"
+            value="${bot.settings.swingLookback ?? 5}"
+            data-bot-id="${bot.id}" data-key="swingLookback" />
+          <span style="font-size:10px;color:var(--muted)">bars each side</span>
+        </div>
+      </div>
+      <div class="bot-card-row">
+        <span class="bot-card-label">TP Mode</span>
+        <div class="bot-card-setting">
+          <select class="small-select" data-bot-id="${bot.id}" data-key="tpMode">
+            <option value="rr" ${(bot.settings.tpMode ?? 'rr') === 'rr' ? 'selected' : ''}>Fixed R:R</option>
+            <option value="atLevel" ${bot.settings.tpMode === 'atLevel' ? 'selected' : ''}>At next S/R level</option>
+          </select>
+        </div>
+      </div>
+      <div class="bot-card-row">
+        <span class="bot-card-label">Sessions</span>
+        <div class="bot-card-setting" style="align-items:center;gap:6px">
+          <input type="checkbox" ${bot.settings.allowAsianSession !== false ? 'checked' : ''}
+            data-bot-id="${bot.id}" data-key="allowAsianSession" />
+          <span style="font-size:10px;color:var(--muted)">Asian</span>
+        </div>
+        <div class="bot-card-setting" style="align-items:center;gap:6px">
+          <input type="checkbox" ${bot.settings.allowLondonSession !== false ? 'checked' : ''}
+            data-bot-id="${bot.id}" data-key="allowLondonSession" />
+          <span style="font-size:10px;color:var(--muted)">London</span>
+        </div>
+        <div class="bot-card-setting" style="align-items:center;gap:6px">
+          <input type="checkbox" ${bot.settings.allowNySession !== false ? 'checked' : ''}
+            data-bot-id="${bot.id}" data-key="allowNySession" />
+          <span style="font-size:10px;color:var(--muted)">NY</span>
+        </div>
+      </div>
+      <div class="bot-card-row">
+        <span class="bot-card-label">Candle Confirm</span>
+        <div class="bot-card-setting" style="align-items:center;gap:6px">
+          <input type="checkbox" ${bot.settings.requireCandleConfirmation ? 'checked' : ''}
+            data-bot-id="${bot.id}" data-key="requireCandleConfirmation" />
+          <span style="font-size:10px;color:var(--muted)">require engulfing/hammer at retest</span>
+        </div>
+      </div>
+    </details>` : ''
+
+  return settingFields
+}
+
 function initBot(): void {
   const botList    = document.getElementById('bot-list')!
   const signalList = document.getElementById('bot-signals-list')!
@@ -2124,183 +2309,8 @@ function initBot(): void {
   // ── Render bot cards ───────────────────────────────────────────────────────
   function renderBotCard(bot: any): string {
     const typeClass = bot.type === 'trendline' ? 'trendline' : bot.type === 'structure' ? 'structure' : ''
-    const pairPills = Object.entries(PAIR_CATEGORIES).map(([category, pairs]) => {
-      const pills = pairs.map(p => {
-        // Empty pairs falls back to forex-only in the backend scan (bot/engine.ts), not all 16 —
-        // mirror that here instead of highlighting every pill.
-        const active = bot.pairs.length === 0 ? PAIR_CATEGORIES.Forex.includes(p) : bot.pairs.includes(p)
-        return `<span class="bot-pair-pill ${active ? 'active' : ''}" data-pair="${p}" data-bot-id="${bot.id}">${p}</span>`
-      }).join('')
-      return `<div class="pair-category-group">
-        <div class="pair-category-header">
-          <span>${category}</span>
-          <button type="button" class="pair-category-select-all" data-category="${category}" data-bot-id="${bot.id}">Select all</button>
-        </div>
-        <div class="bot-card-pairs">${pills}</div>
-      </div>`
-    }).join('')
-
-    const riskFields = `
-      <div class="bot-card-row">
-        <span class="bot-card-label">Risk %</span>
-        <div class="bot-card-setting">
-          <input type="number" min="0.1" max="10" step="0.1"
-            value="${bot.settings.riskPercent ?? 1.0}"
-            data-bot-id="${bot.id}" data-key="riskPercent" />
-          <span style="font-size:10px;color:var(--muted)">% per trade</span>
-        </div>
-        <span class="bot-card-label" style="margin-left:12px">R:R</span>
-        <div class="bot-card-setting">
-          <input type="number" min="1" max="10" step="0.5"
-            value="${bot.settings.rewardRisk ?? (bot.type === 'trendline' ? 3.0 : 2.5)}"
-            data-bot-id="${bot.id}" data-key="rewardRisk" />
-          <span style="font-size:10px;color:var(--muted)">:1</span>
-        </div>
-      </div>
-      <div class="bot-card-row">
-        <span class="bot-card-label">Max Positions</span>
-        <div class="bot-card-setting">
-          <input type="number" min="1" max="20" step="1"
-            value="${bot.settings.maxOpenPositions ?? 2}"
-            data-bot-id="${bot.id}" data-key="maxOpenPositions" />
-          <span style="font-size:10px;color:var(--muted)">concurrent</span>
-        </div>
-        <span class="bot-card-label" style="margin-left:12px">Allow Duplicates</span>
-        <div class="bot-card-setting" style="align-items:center;gap:6px">
-          <input type="checkbox"
-            ${bot.settings.allowDuplicatePairs ? 'checked' : ''}
-            data-bot-id="${bot.id}" data-key="allowDuplicatePairs" />
-          <span style="font-size:10px;color:var(--muted)">same pair twice</span>
-        </div>
-      </div>`
-
-    const settingFields = bot.type === 'structure' ? `
-      <div class="bot-card-row">
-        <span class="bot-card-label">Min Score</span>
-        <div class="bot-card-setting">
-          <input type="number" min="0" max="100" step="1"
-            value="${bot.settings.minConfidenceScore ?? 60}"
-            data-bot-id="${bot.id}" data-key="minConfidenceScore" />
-          <span style="font-size:10px;color:var(--muted)">%</span>
-        </div>
-        <span class="bot-card-label" style="margin-left:12px">Min Confluence</span>
-        <div class="bot-card-setting">
-          <input type="number" min="1" max="5" step="1"
-            value="${bot.settings.minConfluence ?? 2}"
-            data-bot-id="${bot.id}" data-key="minConfluence" />
-          <span style="font-size:10px;color:var(--muted)">S/R levels</span>
-        </div>
-      </div>${riskFields}` : bot.type === 'trendline' ? `
-      <div class="bot-card-row">
-        <span class="bot-card-label">Min Score</span>
-        <div class="bot-card-setting">
-          <input type="number" min="0" max="100" step="1"
-            value="${bot.settings.minConfidenceScore ?? 60}"
-            data-bot-id="${bot.id}" data-key="minConfidenceScore" />
-          <span style="font-size:10px;color:var(--muted)">%</span>
-        </div>
-        <span class="bot-card-label" style="margin-left:12px">Min Touches</span>
-        <div class="bot-card-setting">
-          <input type="number" min="2" max="10" step="1"
-            value="${bot.settings.minTouches ?? 2}"
-            data-bot-id="${bot.id}" data-key="minTouches" />
-        </div>
-      </div>${riskFields}
-      <details class="bot-card-advanced">
-        <summary>Advanced — setup tuning</summary>
-        <div class="bot-card-row">
-          <span class="bot-card-label">SL Buffer</span>
-          <div class="bot-card-setting">
-            <input type="number" min="0" max="2" step="0.05"
-              value="${bot.settings.slBufferAtr ?? 0.1}"
-              data-bot-id="${bot.id}" data-key="slBufferAtr" />
-            <span style="font-size:10px;color:var(--muted)">×ATR beyond line</span>
-          </div>
-          <span class="bot-card-label" style="margin-left:12px">Break Threshold</span>
-          <div class="bot-card-setting">
-            <input type="number" min="0.1" max="2" step="0.05"
-              value="${bot.settings.breakThresholdAtr ?? 0.5}"
-              data-bot-id="${bot.id}" data-key="breakThresholdAtr" />
-            <span style="font-size:10px;color:var(--muted)">×ATR</span>
-          </div>
-        </div>
-        <div class="bot-card-row">
-          <span class="bot-card-label">Retest Window</span>
-          <div class="bot-card-setting">
-            <input type="number" min="2" max="20" step="1"
-              value="${bot.settings.retestWindowBars ?? 6}"
-              data-bot-id="${bot.id}" data-key="retestWindowBars" />
-            <span style="font-size:10px;color:var(--muted)">bars</span>
-          </div>
-          <span class="bot-card-label" style="margin-left:12px">Retest Recency</span>
-          <div class="bot-card-setting">
-            <input type="number" min="1" max="20" step="1"
-              value="${bot.settings.retestRecencyBars ?? 3}"
-              data-bot-id="${bot.id}" data-key="retestRecencyBars" />
-            <span style="font-size:10px;color:var(--muted)">bars</span>
-          </div>
-        </div>
-        <div class="bot-card-row">
-          <span class="bot-card-label">Touch Tolerance</span>
-          <div class="bot-card-setting">
-            <input type="number" min="0.05" max="1" step="0.05"
-              value="${bot.settings.touchToleranceAtr ?? 0.3}"
-              data-bot-id="${bot.id}" data-key="touchToleranceAtr" />
-            <span style="font-size:10px;color:var(--muted)">×ATR</span>
-          </div>
-          <span class="bot-card-label" style="margin-left:12px">Min Stop Dist</span>
-          <div class="bot-card-setting">
-            <input type="number" min="0" max="1" step="0.05"
-              value="${bot.settings.minStopDistAtr ?? 0.2}"
-              data-bot-id="${bot.id}" data-key="minStopDistAtr" />
-            <span style="font-size:10px;color:var(--muted)">×ATR</span>
-          </div>
-        </div>
-        <div class="bot-card-row">
-          <span class="bot-card-label">Swing Lookback</span>
-          <div class="bot-card-setting">
-            <input type="number" min="2" max="20" step="1"
-              value="${bot.settings.swingLookback ?? 5}"
-              data-bot-id="${bot.id}" data-key="swingLookback" />
-            <span style="font-size:10px;color:var(--muted)">bars each side</span>
-          </div>
-        </div>
-        <div class="bot-card-row">
-          <span class="bot-card-label">TP Mode</span>
-          <div class="bot-card-setting">
-            <select class="small-select" data-bot-id="${bot.id}" data-key="tpMode">
-              <option value="rr" ${(bot.settings.tpMode ?? 'rr') === 'rr' ? 'selected' : ''}>Fixed R:R</option>
-              <option value="atLevel" ${bot.settings.tpMode === 'atLevel' ? 'selected' : ''}>At next S/R level</option>
-            </select>
-          </div>
-        </div>
-        <div class="bot-card-row">
-          <span class="bot-card-label">Sessions</span>
-          <div class="bot-card-setting" style="align-items:center;gap:6px">
-            <input type="checkbox" ${bot.settings.allowAsianSession !== false ? 'checked' : ''}
-              data-bot-id="${bot.id}" data-key="allowAsianSession" />
-            <span style="font-size:10px;color:var(--muted)">Asian</span>
-          </div>
-          <div class="bot-card-setting" style="align-items:center;gap:6px">
-            <input type="checkbox" ${bot.settings.allowLondonSession !== false ? 'checked' : ''}
-              data-bot-id="${bot.id}" data-key="allowLondonSession" />
-            <span style="font-size:10px;color:var(--muted)">London</span>
-          </div>
-          <div class="bot-card-setting" style="align-items:center;gap:6px">
-            <input type="checkbox" ${bot.settings.allowNySession !== false ? 'checked' : ''}
-              data-bot-id="${bot.id}" data-key="allowNySession" />
-            <span style="font-size:10px;color:var(--muted)">NY</span>
-          </div>
-        </div>
-        <div class="bot-card-row">
-          <span class="bot-card-label">Candle Confirm</span>
-          <div class="bot-card-setting" style="align-items:center;gap:6px">
-            <input type="checkbox" ${bot.settings.requireCandleConfirmation ? 'checked' : ''}
-              data-bot-id="${bot.id}" data-key="requireCandleConfirmation" />
-            <span style="font-size:10px;color:var(--muted)">require engulfing/hammer at retest</span>
-          </div>
-        </div>
-      </details>` : ''
+    const pairPills = buildPairPills(bot)
+    const settingFields = buildSettingFields(bot)
 
     const acct       = cachedAccounts.find(a => a.id === bot.accountId)
     const acctBadge  = acct
@@ -2650,6 +2660,241 @@ function initBot(): void {
   loadCronLog()
 }
 
+// ── Test bots (Backtest tab) ────────────────────────────────────────────────
+// Full bot configs used for backtesting only — same settings shape as a live bot (reuses
+// buildPairPills/buildSettingFields above), but with a manually-set starting balance instead
+// of a real account, and never shown in the live Bot tab (bot/routes.ts's GET /bots hides
+// is_test rows by default). "Promote to Live" just assigns a real account and flips is_test
+// back off via the same PUT endpoint the Bot tab's own Save button already uses.
+function renderTestBotCard(bot: any): string {
+  const typeClass = bot.type === 'trendline' ? 'trendline' : bot.type === 'structure' ? 'structure' : ''
+  const pairPills = buildPairPills(bot)
+  const settingFields = buildSettingFields(bot)
+
+  return `
+    <div class="bot-card test-bot-card" data-bot-id="${bot.id}">
+      <div class="bot-card-header">
+        <span class="bot-card-name">${bot.name}</span>
+        <span class="bot-type-badge ${typeClass}">${bot.type}</span>
+        <span class="bot-type-badge">TEST</span>
+        <span class="bot-card-chevron">▼</span>
+      </div>
+      <div class="bot-card-body">
+        <div class="bot-card-row bot-card-row-pairs">
+          <span class="bot-card-label">Pairs</span>
+          <div class="bot-card-pairs-wrap">${pairPills}</div>
+        </div>
+        ${settingFields}
+        <div class="bot-card-row">
+          <span class="bot-card-label">Starting Balance</span>
+          <div class="bot-card-setting">
+            <span style="font-size:12px;color:var(--muted)">£</span>
+            <input type="number" min="100" step="100"
+              value="${bot.startingBalance ?? 10000}"
+              class="test-bot-balance-input" data-bot-id="${bot.id}" />
+          </div>
+        </div>
+        <div class="bot-card-row">
+          <span class="bot-card-label">Promote to Live</span>
+          <div class="bot-card-setting" style="flex:1;gap:6px">
+            <select class="small-select test-bot-promote-select" data-bot-id="${bot.id}" style="font-size:11px;padding:3px 6px;flex:1">
+              <option value="">— Select account —</option>
+              ${cachedAccounts.map(a => `<option value="${a.id}">${a.name} (${a.type.toUpperCase()})</option>`).join('')}
+            </select>
+            <button class="small-btn test-bot-promote-btn" data-bot-id="${bot.id}">Promote</button>
+          </div>
+        </div>
+        <div class="bot-card-actions">
+          <button class="test-bot-save-btn" data-bot-id="${bot.id}">Save</button>
+          <button class="test-bot-run-btn" data-bot-id="${bot.id}">▶ Use for Backtest</button>
+          <button class="bot-card-delete-btn test-bot-delete-btn" data-bot-id="${bot.id}">Delete</button>
+        </div>
+      </div>
+    </div>`
+}
+
+function attachTestBotCardEvents(botId: string, onChange: () => void): void {
+  const testBotList = document.getElementById('test-bot-list')!
+  const card = testBotList.querySelector<HTMLElement>(`.test-bot-card[data-bot-id="${botId}"]`)
+  if (!card) return
+
+  card.querySelector('.bot-card-header')?.addEventListener('click', () => {
+    card.querySelector('.bot-card-body')?.classList.toggle('open')
+    const chev = card.querySelector<HTMLElement>('.bot-card-chevron')
+    if (chev) chev.textContent = card.querySelector('.bot-card-body')?.classList.contains('open') ? '▲' : '▼'
+  })
+
+  card.querySelectorAll<HTMLElement>('.bot-pair-pill').forEach(pill => {
+    pill.addEventListener('click', (e) => {
+      e.stopPropagation()
+      pill.classList.toggle('active')
+    })
+  })
+
+  card.querySelectorAll<HTMLButtonElement>('.pair-category-select-all').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const group = btn.closest('.pair-category-group')
+      const pills = group?.querySelectorAll<HTMLElement>('.bot-pair-pill') ?? []
+      const allActive = Array.from(pills).every(p => p.classList.contains('active'))
+      pills.forEach(p => p.classList.toggle('active', !allActive))
+    })
+  })
+
+  // Save (settings, pairs, starting balance)
+  card.querySelector<HTMLButtonElement>('.test-bot-save-btn')?.addEventListener('click', async (e) => {
+    e.stopPropagation()
+    const btn = e.currentTarget as HTMLButtonElement
+    btn.textContent = '…'
+    try {
+      const activePills = card.querySelectorAll<HTMLElement>('.bot-pair-pill.active')
+      const allActive   = activePills.length === ALL_PAIRS.length
+      const pairs = allActive ? [] : Array.from(activePills).map(p => p.dataset.pair!)
+      const settings: Record<string, unknown> = {}
+      card.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-key]').forEach(inp => {
+        settings[inp.dataset.key!] = inp.tagName === 'SELECT'
+          ? inp.value
+          : (inp as HTMLInputElement).type === 'checkbox' ? (inp as HTMLInputElement).checked : Number(inp.value)
+      })
+      const startingBalance = Number(card.querySelector<HTMLInputElement>('.test-bot-balance-input')?.value ?? 10000)
+      const res = await fetch(`/api/v1/bot/bots/${botId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pairs, settings, startingBalance }),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      btn.textContent = '✓ Saved'
+      setTimeout(() => { btn.textContent = 'Save' }, 2000)
+    } catch (e: any) {
+      btn.textContent = '⚠ Error'
+      setTimeout(() => { btn.textContent = 'Save' }, 2000)
+    }
+  })
+
+  // Select this test bot in the backtest run picker
+  card.querySelector<HTMLButtonElement>('.test-bot-run-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation()
+    selectBacktestBot(botId)
+    document.getElementById('backtest-config-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
+
+  // Promote to live
+  card.querySelector<HTMLButtonElement>('.test-bot-promote-btn')?.addEventListener('click', async (e) => {
+    e.stopPropagation()
+    const btn = e.currentTarget as HTMLButtonElement
+    const accountId = card.querySelector<HTMLSelectElement>('.test-bot-promote-select')?.value
+    if (!accountId) { alert('Select an account to promote this bot to.'); return }
+    if (!confirm('Promote this test bot to a live bot on the selected account? It will then appear in the Bot tab (still off until you turn it on there).')) return
+    btn.disabled = true
+    btn.textContent = '…'
+    try {
+      const res = await fetch(`/api/v1/bot/bots/${botId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId, isTest: false }),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      onChange()
+    } catch (e: any) {
+      alert(`Promote failed: ${e.message}`)
+      btn.disabled = false
+      btn.textContent = 'Promote'
+    }
+  })
+
+  // Delete
+  card.querySelector<HTMLButtonElement>('.test-bot-delete-btn')?.addEventListener('click', async (e) => {
+    e.stopPropagation()
+    if (!confirm('Delete this test bot?')) return
+    await fetch(`/api/v1/bot/bots/${botId}`, { method: 'DELETE' })
+    onChange()
+  })
+}
+
+async function loadTestBots(): Promise<void> {
+  const testBotList = document.getElementById('test-bot-list')
+  if (!testBotList) return
+  try {
+    const res = await fetch('/api/v1/bot/bots?includeTest=true')
+    if (!res.ok) return
+    const bots: any[] = (await res.json() as any[]).filter(b => b.isTest)
+    if (!bots.length) {
+      testBotList.innerHTML = '<div class="bot-no-signals">No test bots yet. Click + Create Test Bot to make one.</div>'
+    } else {
+      testBotList.innerHTML = bots.map(renderTestBotCard).join('')
+      bots.forEach(b => attachTestBotCardEvents(b.id, () => { loadTestBots(); loadBacktestBotSelector() }))
+    }
+  } catch { /* silent */ }
+}
+
+function initTestBotModal(): void {
+  const modal          = document.getElementById('test-bot-add-modal')
+  const addBtn          = document.getElementById('test-bot-add-btn')
+  const nameEl          = document.getElementById('tb-new-name') as HTMLInputElement
+  const typeHidden      = document.getElementById('tb-new-type') as HTMLInputElement
+  const balanceEl       = document.getElementById('tb-new-balance') as HTMLInputElement
+  const cancelBtn       = document.getElementById('tb-add-cancel-btn')
+  const confirmBtn      = document.getElementById('tb-add-confirm-btn') as HTMLButtonElement
+  if (!modal || !addBtn || !nameEl || !typeHidden || !balanceEl || !cancelBtn || !confirmBtn) return
+
+  addBtn.addEventListener('click', () => modal.classList.remove('hidden'))
+  cancelBtn.addEventListener('click', () => modal.classList.add('hidden'))
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.add('hidden') })
+
+  // Custom type select — same pattern as the Bot tab's Add Bot modal
+  const typeSelect   = document.getElementById('tb-type-select')!
+  const typeSelected = typeSelect.querySelector<HTMLElement>('.custom-select-selected')!
+  const typeOptions  = typeSelect.querySelector<HTMLElement>('.custom-select-options')!
+  typeSelected.addEventListener('click', (e) => { e.stopPropagation(); typeOptions.classList.toggle('hidden') })
+  typeOptions.querySelectorAll<HTMLElement>('.custom-select-option').forEach(opt => {
+    opt.addEventListener('click', () => {
+      typeHidden.value = opt.dataset.value!
+      typeSelected.textContent = opt.textContent
+      typeOptions.querySelectorAll('.custom-select-option').forEach(o => o.classList.remove('active'))
+      opt.classList.add('active')
+      typeOptions.classList.add('hidden')
+    })
+  })
+  document.addEventListener('click', () => typeOptions.classList.add('hidden'))
+
+  document.querySelectorAll<HTMLInputElement>('.tb-new-pair-select-all').forEach(selectAll => {
+    selectAll.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const category = selectAll.dataset.category
+      document.querySelectorAll<HTMLInputElement>(`.tb-new-pair[data-category="${category}"]`)
+        .forEach(c => { c.checked = selectAll.checked })
+    })
+  })
+
+  confirmBtn.addEventListener('click', async () => {
+    const type  = typeHidden.value
+    const name  = nameEl.value.trim() || undefined
+    const pairs = Array.from(document.querySelectorAll<HTMLInputElement>('.tb-new-pair'))
+      .filter(c => c.checked).map(c => c.value)
+    const startingBalance = Number(balanceEl.value) || 10000
+
+    confirmBtn.textContent = 'Creating…'
+    try {
+      const res = await fetch('/api/v1/bot/bots', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, name, pairs, isTest: true, startingBalance }),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      modal.classList.add('hidden')
+      nameEl.value = ''
+      balanceEl.value = '10000'
+      document.querySelectorAll<HTMLInputElement>('.tb-new-pair, .tb-new-pair-select-all').forEach(c => c.checked = false)
+      await loadTestBots()
+      await loadBacktestBotSelector()
+    } catch (e: any) {
+      alert(`Failed: ${e.message}`)
+    } finally {
+      confirmBtn.textContent = 'Create Test Bot'
+    }
+  })
+}
+
 // ── Backtest ───────────────────────────────────────────────────────────────
 async function initBacktestTab(): Promise<void> {
   // Pre-fill dates: last 12 months
@@ -2681,6 +2926,9 @@ async function initBacktestTab(): Promise<void> {
   // Load bots and populate the bot selector
   await loadBacktestBotSelector()
 
+  initTestBotModal()
+  await loadTestBots()
+
   loadBacktestRuns()
 }
 
@@ -2695,7 +2943,7 @@ async function loadBacktestBotSelector(): Promise<void> {
 
   let bots: any[] = []
   try {
-    const res = await fetch('/api/v1/bot/bots')
+    const res = await fetch('/api/v1/bot/bots?includeTest=true')
     bots = await res.json() as any[]
   } catch { /* leave empty */ }
 
@@ -2704,10 +2952,11 @@ async function loadBacktestBotSelector(): Promise<void> {
     return
   }
 
-  // Build options
+  // Build options — test bots are included (backtests are exactly what they're for) and
+  // clearly prefixed so they're never confused with a real live bot.
   optionsEl.innerHTML = bots.map((b, i) =>
     `<div class="custom-select-option ${i === 0 ? 'active' : ''}" data-value="${b.id}" data-bot-type="${b.type}">
-      ${b.name} — ${b.type === 'structure' ? 'S/R zone bounce' : 'Trendline break + retest'}
+      ${b.isTest ? '[TEST] ' : ''}${b.name} — ${b.type === 'structure' ? 'S/R zone bounce' : 'Trendline break + retest'}
     </div>`
   ).join('')
 
@@ -2733,6 +2982,23 @@ async function loadBacktestBotSelector(): Promise<void> {
   document.addEventListener('click', e => {
     if (!btSelect.contains(e.target as Node)) optionsEl.classList.add('hidden')
   })
+}
+
+// Programmatically picks a bot in the backtest run selector — used by a test bot card's
+// "Use for Backtest" button so it jumps straight to the run config already selected.
+function selectBacktestBot(botId: string): void {
+  const btSelect  = document.getElementById('bt-bot-select')
+  const btBotId   = document.getElementById('bt-bot-id')   as HTMLInputElement
+  const btBotType = document.getElementById('bt-bot-type') as HTMLInputElement
+  if (!btSelect) return
+  const opt = btSelect.querySelector<HTMLElement>(`.custom-select-option[data-value="${botId}"]`)
+  if (!opt) return
+  const selected = btSelect.querySelector('.custom-select-selected') as HTMLElement
+  btBotId.value   = botId
+  btBotType.value = opt.dataset.botType ?? 'trendline'
+  if (selected) { selected.textContent = opt.textContent?.trim() ?? ''; selected.dataset.value = botId }
+  btSelect.querySelectorAll('.custom-select-option').forEach(o => o.classList.remove('active'))
+  opt.classList.add('active')
 }
 
 let currentRunId: string | null = null
