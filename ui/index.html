@@ -867,6 +867,21 @@
               </div>
             </div>
 
+            <!-- View mode: fixed risk (as recorded) vs compounding account growth -->
+            <div class="backtest-config-row">
+              <div class="bot-card-mode-row" id="bt-view-mode">
+                <button type="button" class="bot-card-mode-btn active" data-mode="fixed">Fixed Risk (as recorded)</button>
+                <button type="button" class="bot-card-mode-btn" data-mode="compounding">Compounding Growth</button>
+              </div>
+              <span id="bt-compound-balance-row" class="hidden" style="margin-left:16px;display:inline-flex;align-items:center;gap:6px">
+                <label style="margin:0">Starting Balance</label>
+                <input type="number" id="bt-compound-balance" min="100" step="100" value="1000" style="width:100px;padding:4px 6px" />
+              </span>
+            </div>
+            <div id="bt-compound-caveat" class="bt-settings-note hidden">
+              Pure compounding math — risk is a % of the running balance with no ceiling, so at higher risk % over many trades this can grow (or draw down) far beyond what any real account or broker could actually sustain. Useful for comparing sequences, not as a literal forecast.
+            </div>
+
             <!-- Stats cards -->
             <div class="backtest-stats" id="bt-stats"></div>
             <div id="bt-diagnostics" class="hidden"></div>

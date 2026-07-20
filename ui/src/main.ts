@@ -2909,6 +2909,21 @@ async function initBacktestTab(): Promise<void> {
 
   document.getElementById('bt-run-btn')?.addEventListener('click', runBacktest)
 
+  // Fixed Risk / Compounding Growth toggle for the currently-displayed run
+  document.querySelectorAll<HTMLButtonElement>('#bt-view-mode .bot-card-mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#bt-view-mode .bot-card-mode-btn').forEach(b => b.classList.remove('active'))
+      btn.classList.add('active')
+      const isCompounding = btn.dataset.mode === 'compounding'
+      document.getElementById('bt-compound-balance-row')?.classList.toggle('hidden', !isCompounding)
+      document.getElementById('bt-compound-caveat')?.classList.toggle('hidden', !isCompounding)
+      if (currentBacktestRun) renderBacktestStatsAndCurve(currentBacktestRun)
+    })
+  })
+  document.getElementById('bt-compound-balance')?.addEventListener('input', () => {
+    if (currentBacktestRun) renderBacktestStatsAndCurve(currentBacktestRun)
+  })
+
   document.getElementById('bt-refresh-runs')?.addEventListener('click', loadBacktestRuns)
   document.getElementById('bt-delete-btn')?.addEventListener('click', deleteCurrentRun)
   document.getElementById('bt-close-btn')?.addEventListener('click', () => {
@@ -3100,30 +3115,55 @@ function safeDateTime(ms: any): string {
   return `${d.toLocaleDateString('en-GB')} ${d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`
 }
 
+// The trade sequence (win/loss/expired, in order) from the current results view — both view
+// modes below replay the exact same sequence, just with different position sizing.
+let currentBacktestExecutedTrades: any[] = []
+let currentBacktestBotId: string | null = null
+let currentBacktestRun: any = null
+
+const btPipFactor = (pair: string) => pair.includes('JPY') ? 100 : 10000
+
+// R-multiple: how many multiples of that trade's own risk it made/lost, derived purely from
+// the trade's own stored entry/stop/pnl — independent of whatever dollar risk amount was
+// actually used to size it, so it's reusable to replay the same win/loss sequence at any
+// starting balance or risk %.
+function rMultiple(t: any): number {
+  const stopPips = Math.abs(t.entry_price - t.stop_loss) * btPipFactor(t.pair)
+  if (!stopPips || t.pnl_pips == null) return 0
+  return t.pnl_pips / stopPips
+}
+
+function computeCompoundingSeries(trades: any[], startingBalance: number, riskPercent: number) {
+  let balance = startingBalance
+  let peak = startingBalance
+  let maxDrawdown = 0
+  const balances: number[] = []
+  const tradePnls: number[] = []
+  for (const t of trades) {
+    if (t.pnl_gbp == null) continue
+    const pnl = balance * (riskPercent / 100) * rMultiple(t)
+    balance += pnl
+    tradePnls.push(pnl)
+    balances.push(balance)
+    if (balance > peak) peak = balance
+    const dd = peak - balance
+    if (dd > maxDrawdown) maxDrawdown = dd
+  }
+  const mean = tradePnls.length > 0 ? tradePnls.reduce((a, b) => a + b, 0) / tradePnls.length : 0
+  const variance = tradePnls.length > 1
+    ? tradePnls.reduce((sum, p) => sum + (p - mean) ** 2, 0) / (tradePnls.length - 1)
+    : 0
+  const sharpe = variance > 0 ? (mean / Math.sqrt(variance)) * Math.sqrt(252) : 0
+  return { balances, finalBalance: balance, maxDrawdown, sharpe: +sharpe.toFixed(2) }
+}
+
+function currentViewMode(): 'fixed' | 'compounding' {
+  return (document.querySelector('#bt-view-mode .bot-card-mode-btn.active')?.getAttribute('data-mode') as any) ?? 'fixed'
+}
+
 function renderBacktestResults(run: any): void {
   const resultsEl = document.getElementById('backtest-results')!
   resultsEl.classList.remove('hidden')
-
-  const s = run.summary ?? {}
-  const totalPnl = s.totalPnl ?? 0
-  const winRate  = s.winRate  ?? 0
-
-  const statsEl = document.getElementById('bt-stats')!
-  statsEl.innerHTML = [
-    { label: 'Total Trades', value: String(s.totalTrades ?? 0), cls: '' },
-    { label: 'Win Rate',     value: `${winRate}%`,              cls: winRate >= 50 ? 'positive' : 'negative' },
-    { label: 'Total P&L',   value: `£${totalPnl.toFixed(2)}`,  cls: totalPnl >= 0 ? 'positive' : 'negative' },
-    { label: 'Max Drawdown', value: `£${(s.maxDrawdown ?? 0).toFixed(2)}`, cls: 'negative' },
-    { label: 'Sharpe',       value: String(s.sharpe ?? 0),      cls: (s.sharpe ?? 0) >= 1 ? 'positive' : '' },
-    { label: 'Wins',         value: String(s.wins ?? 0),        cls: 'positive' },
-    { label: 'Losses',       value: String(s.losses ?? 0),      cls: 'negative' },
-    { label: 'No Trades',    value: String(s.rejectedSignals ?? 0), cls: '' },
-  ].map(c => `
-    <div class="backtest-card">
-      <div class="bc-label">${c.label}</div>
-      <div class="bc-value ${c.cls}">${c.value}</div>
-    </div>
-  `).join('')
 
   const cfg = run.config ?? {}
   const trades: any[] = run.trades ?? []
@@ -3134,10 +3174,20 @@ function renderBacktestResults(run: any): void {
   // Separate executed trades from ML-only rejected signals
   const executedTrades = trades.filter((t: any) => t.status === 'executed')
   const rejectedCount  = trades.filter((t: any) => t.status === 'rejected').length
+  currentBacktestExecutedTrades = executedTrades
+  currentBacktestBotId = cfg.botId ?? null
+  currentBacktestRun = run
+
+  // Default the compounding starting balance to the bot's own (test bots have one saved;
+  // live bots don't, so fall back to a sane placeholder the user can override).
+  const bot = currentBacktestBotId ? backtestBotsCache[currentBacktestBotId] : null
+  const balanceInput = document.getElementById('bt-compound-balance') as HTMLInputElement
+  if (balanceInput) balanceInput.value = String(bot?.startingBalance ?? 1000)
 
   // Show diagnostics if 0 executed trades
   const diagEl = document.getElementById('bt-diagnostics')
   if (diagEl) {
+    const s = run.summary ?? {}
     const diag: Record<string, number> = s.diagnostics ?? {}
     const diagEntries = Object.entries(diag).sort((a,b) => b[1]-a[1])
     {
@@ -3162,7 +3212,7 @@ function renderBacktestResults(run: any): void {
     }
   }
 
-  renderEquityCurve(executedTrades)
+  renderBacktestStatsAndCurve(run)
 
   const tbody = document.getElementById('bt-trades-body')!
   if (executedTrades.length === 0) {
@@ -3188,17 +3238,87 @@ function renderBacktestResults(run: any): void {
   }
 }
 
-function renderEquityCurve(trades: any[]): void {
-  const container = document.getElementById('bt-equity-chart')!
-  const completed = trades.filter((t: any) => t.pnl_gbp != null)
-  if (completed.length === 0) { container.innerHTML = ''; return }
+// Re-renders just the stats cards + equity curve for whichever view mode is currently
+// selected — called on initial render and whenever the mode toggle or starting balance
+// changes, without re-fetching or touching the trade table below.
+function renderBacktestStatsAndCurve(run: any): void {
+  const s = run.summary ?? {}
+  const mode = currentViewMode()
+  const statsEl = document.getElementById('bt-stats')!
 
-  let cum = 0
-  const points = completed.map((t: any) => { cum += Number(t.pnl_gbp); return cum })
+  if (mode === 'fixed') {
+    const totalPnl = s.totalPnl ?? 0
+    const winRate  = s.winRate  ?? 0
+    statsEl.innerHTML = [
+      { label: 'Total Trades', value: String(s.totalTrades ?? 0), cls: '' },
+      { label: 'Win Rate',     value: `${winRate}%`,              cls: winRate >= 50 ? 'positive' : 'negative' },
+      { label: 'Total P&L',   value: `£${totalPnl.toFixed(2)}`,  cls: totalPnl >= 0 ? 'positive' : 'negative' },
+      { label: 'Max Drawdown', value: `£${(s.maxDrawdown ?? 0).toFixed(2)}`, cls: 'negative' },
+      { label: 'Sharpe',       value: String(s.sharpe ?? 0),      cls: (s.sharpe ?? 0) >= 1 ? 'positive' : '' },
+      { label: 'Wins',         value: String(s.wins ?? 0),        cls: 'positive' },
+      { label: 'Losses',       value: String(s.losses ?? 0),      cls: 'negative' },
+      { label: 'No Trades',    value: String(s.rejectedSignals ?? 0), cls: '' },
+    ].map(c => `
+      <div class="backtest-card">
+        <div class="bc-label">${c.label}</div>
+        <div class="bc-value ${c.cls}">${c.value}</div>
+      </div>
+    `).join('')
+    renderEquityCurve({ mode: 'fixed', trades: currentBacktestExecutedTrades })
+    return
+  }
+
+  // Compounding — same win/loss sequence, sized as a % of the running (growing/shrinking)
+  // balance instead of a fixed amount, so it shows what real fixed-fractional compounding
+  // would have looked like.
+  const bot = currentBacktestBotId ? backtestBotsCache[currentBacktestBotId] : null
+  const riskPercent = (bot?.settings?.riskPercent as number | undefined) ?? 1
+  const startingBalance = Number((document.getElementById('bt-compound-balance') as HTMLInputElement)?.value) || 1000
+  const { balances, finalBalance, maxDrawdown, sharpe } = computeCompoundingSeries(currentBacktestExecutedTrades, startingBalance, riskPercent)
+  const totalPnl = finalBalance - startingBalance
+  const winRate  = s.winRate ?? 0
+
+  statsEl.innerHTML = [
+    { label: 'Total Trades', value: String(s.totalTrades ?? 0), cls: '' },
+    { label: 'Win Rate',     value: `${winRate}%`,              cls: winRate >= 50 ? 'positive' : 'negative' },
+    { label: 'Total P&L',   value: `£${totalPnl.toFixed(2)}`,  cls: totalPnl >= 0 ? 'positive' : 'negative' },
+    { label: 'Final Balance', value: `£${finalBalance.toFixed(2)}`, cls: totalPnl >= 0 ? 'positive' : 'negative' },
+    { label: 'Max Drawdown', value: `£${maxDrawdown.toFixed(2)}`, cls: 'negative' },
+    { label: 'Sharpe',       value: String(sharpe),            cls: sharpe >= 1 ? 'positive' : '' },
+    { label: 'Wins',         value: String(s.wins ?? 0),        cls: 'positive' },
+    { label: 'Losses',       value: String(s.losses ?? 0),      cls: 'negative' },
+  ].map(c => `
+    <div class="backtest-card">
+      <div class="bc-label">${c.label}</div>
+      <div class="bc-value ${c.cls}">${c.value}</div>
+    </div>
+  `).join('')
+  renderEquityCurve({ mode: 'compounding', balances, startingBalance })
+}
+
+function renderEquityCurve(opts: { mode: 'fixed'; trades: any[] } | { mode: 'compounding'; balances: number[]; startingBalance: number }): void {
+  const container = document.getElementById('bt-equity-chart')!
+
+  let points: number[]
+  let baseline: number // the "flat" reference line — 0 for cumulative P&L, starting balance for account value
+  let endLabel: string
+  if (opts.mode === 'fixed') {
+    const completed = opts.trades.filter((t: any) => t.pnl_gbp != null)
+    if (completed.length === 0) { container.innerHTML = ''; return }
+    let cum = 0
+    points = completed.map((t: any) => { cum += Number(t.pnl_gbp); return cum })
+    baseline = 0
+    endLabel = `£${points[points.length - 1]!.toFixed(0)}`
+  } else {
+    if (opts.balances.length === 0) { container.innerHTML = ''; return }
+    points = [opts.startingBalance, ...opts.balances]
+    baseline = opts.startingBalance
+    endLabel = `£${points[points.length - 1]!.toFixed(0)} balance`
+  }
 
   const W = 600, H = 200, PAD = 30
-  const minY = Math.min(0, ...points)
-  const maxY = Math.max(0, ...points)
+  const minY = Math.min(baseline, ...points)
+  const maxY = Math.max(baseline, ...points)
   const rangeY = maxY - minY || 1
   const rangeX = points.length - 1 || 1
 
@@ -3206,14 +3326,14 @@ function renderEquityCurve(trades: any[]): void {
   const py = (v: number) => PAD + (1 - (v - minY) / rangeY) * (H - PAD * 2)
 
   const polyline = points.map((v, i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ')
-  const zeroY = py(0).toFixed(1)
+  const baselineY = py(baseline).toFixed(1)
 
   container.innerHTML = `
     <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="background:#111;border-radius:4px">
-      <line x1="${PAD}" y1="${zeroY}" x2="${W - PAD}" y2="${zeroY}" stroke="#444" stroke-width="1" stroke-dasharray="4,4"/>
+      <line x1="${PAD}" y1="${baselineY}" x2="${W - PAD}" y2="${baselineY}" stroke="#444" stroke-width="1" stroke-dasharray="4,4"/>
       <polyline points="${polyline}" fill="none" stroke="#3fb950" stroke-width="2"/>
-      <text x="${PAD}" y="${H - 6}" fill="#666" font-size="9" font-family="monospace">${completed.length} trades</text>
-      <text x="${W - PAD}" y="${H - 6}" fill="#666" font-size="9" font-family="monospace" text-anchor="end">£${cum.toFixed(0)}</text>
+      <text x="${PAD}" y="${H - 6}" fill="#666" font-size="9" font-family="monospace">${points.length - (opts.mode === 'compounding' ? 1 : 0)} trades</text>
+      <text x="${W - PAD}" y="${H - 6}" fill="#666" font-size="9" font-family="monospace" text-anchor="end">${endLabel}</text>
     </svg>
   `
 }
