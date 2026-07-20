@@ -2446,7 +2446,7 @@ function initBot(): void {
 
   // ── Render bot cards ───────────────────────────────────────────────────────
   function renderBotCard(bot: any): string {
-    const typeClass = bot.type === 'trendline' ? 'trendline' : bot.type === 'structure' ? 'structure' : ''
+    const typeClass = bot.type === 'trendline' ? 'trendline' : bot.type === 'structure' ? 'structure' : bot.type === 'fibonacci' ? 'fibonacci' : ''
     const pairPills = buildPairPills(bot)
     const settingFields = buildSettingFields(bot)
 
@@ -2805,7 +2805,7 @@ function initBot(): void {
 // is_test rows by default). "Promote to Live" just assigns a real account and flips is_test
 // back off via the same PUT endpoint the Bot tab's own Save button already uses.
 function renderTestBotCard(bot: any): string {
-  const typeClass = bot.type === 'trendline' ? 'trendline' : bot.type === 'structure' ? 'structure' : ''
+  const typeClass = bot.type === 'trendline' ? 'trendline' : bot.type === 'structure' ? 'structure' : bot.type === 'fibonacci' ? 'fibonacci' : ''
   const pairPills = buildPairPills(bot)
   const settingFields = buildSettingFields(bot)
 
@@ -3078,6 +3078,18 @@ async function initBacktestTab(): Promise<void> {
   loadBacktestRuns()
 }
 
+function botTypeShortLabel(type: string): string {
+  if (type === 'structure') return 'S/R zone bounce'
+  if (type === 'fibonacci') return 'Golden pocket pullback'
+  return 'Trendline break + retest'
+}
+
+function botTypeDisplayName(type: string): string {
+  if (type === 'structure') return 'Structure Bot'
+  if (type === 'fibonacci') return 'Fibonacci Bot'
+  return 'Trendline Bot'
+}
+
 async function loadBacktestBotSelector(): Promise<void> {
   const btSelect  = document.getElementById('bt-bot-select')
   const btBotId   = document.getElementById('bt-bot-id')   as HTMLInputElement
@@ -3106,7 +3118,7 @@ async function loadBacktestBotSelector(): Promise<void> {
   // clearly prefixed so they're never confused with a real live bot.
   optionsEl.innerHTML = bots.map((b, i) =>
     `<div class="custom-select-option ${i === 0 ? 'active' : ''}" data-value="${b.id}" data-bot-type="${b.type}">
-      ${b.isTest ? '[TEST] ' : ''}${b.name} — ${b.type === 'structure' ? 'S/R zone bounce' : 'Trendline break + retest'}
+      ${b.isTest ? '[TEST] ' : ''}${b.name} — ${botTypeShortLabel(b.type)}
     </div>`
   ).join('')
 
@@ -3305,7 +3317,13 @@ function renderBacktestResults(run: any): void {
 
   const cfg = run.config ?? {}
   const trades: any[] = run.trades ?? []
-  const strategyLabel = trades.some((t: any) => t.trade_class === 'structure') ? 'Structure Bot' : 'Trendline Bot'
+  // Prefer the run's own recorded botType (always sent by the current UI); older runs from
+  // before that field existed fall back to inferring from executed trades' trade_class.
+  const strategyLabel = cfg.botType
+    ? botTypeDisplayName(cfg.botType)
+    : trades.some((t: any) => t.trade_class === 'structure') ? 'Structure Bot'
+    : trades.some((t: any) => t.trade_class === 'fibonacci') ? 'Fibonacci Bot'
+    : 'Trendline Bot'
   ;(document.getElementById('bt-results-title') as HTMLElement).textContent =
     `Results — ${strategyLabel} — ${(cfg.pairs ?? []).join(', ')} — ${safeDate(cfg.fromMs)} to ${safeDate(cfg.toMs)}`
 
@@ -3494,7 +3512,7 @@ async function loadBacktestRuns(): Promise<void> {
       const dateStr    = safeDateTime(r.started_at).replace('—', '?')
       const pnlStr     = s ? (s.totalPnl >= 0 ? `+£${s.totalPnl}` : `-£${Math.abs(s.totalPnl)}`) : ''
       const winStr     = s ? `${s.wins}W/${s.losses}L (${s.winRate}%)` : ''
-      const stratLabel = 'TL'
+      const stratLabel = cfg?.botType === 'structure' ? 'STR' : cfg?.botType === 'fibonacci' ? 'FIB' : 'TL'
       return `<div class="bt-run-row" data-run-id="${r.id}">
         <span class="bt-run-date">${dateStr}</span>
         <span class="bt-run-strategy-badge">${stratLabel}</span>
