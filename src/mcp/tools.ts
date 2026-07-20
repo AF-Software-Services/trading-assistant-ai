@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CurrencyPair, Timeframe } from "../types/market.ts";
-import { PHASE1_PAIRS, ALL_TRADEABLE_PAIRS } from "../types/market.ts";
+import { ALL_TRADEABLE_PAIRS } from "../types/market.ts";
 import { createMarketDataProvider } from "../providers/factory.ts";
 import { calculateATR } from "../engines/trend.ts";
 import { detectTrendlineSignal, getDailyBias, detectTrendlineOverlays } from "../engines/trendline.ts";
@@ -235,9 +235,9 @@ export function registerTools(server: McpServer, env: Env): void {
   // ── 15. get_news ─────────────────────────────────────────────────────────────
   server.tool(
     "get_news",
-    "Get recent news headlines and sentiment for a currency pair, pulled from DailyFX and ForexLive RSS feeds. Cached 1 hour. Use this to provide fundamental context alongside technical analysis — upcoming central bank decisions, economic data releases, and macro themes affecting the pair.",
+    "Get recent news headlines and sentiment for an instrument (forex, index, or commodity), pulled from DailyFX and ForexLive RSS feeds. Cached 1 hour. Use this to provide fundamental context alongside technical analysis — upcoming central bank decisions, economic data releases, and macro themes affecting it. Coverage is naturally thinner for indices/commodities than forex majors, since these are forex-focused feeds.",
     {
-      pair: z.enum(PHASE1_PAIRS as [CurrencyPair, ...CurrencyPair[]]).describe("Currency pair"),
+      pair: PAIR_ENUM.describe("Instrument — any of the 16 tradeable pairs/indices/commodities"),
     },
     async ({ pair }) => {
       const news = await fetchNewsForPair(pair, env.KV);
