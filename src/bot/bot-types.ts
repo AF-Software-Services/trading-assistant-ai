@@ -4,7 +4,7 @@ import type { CurrencyPair } from "../types/market.ts";
 // To add a new bot type: add an entry to BOT_TYPE_REGISTRY with id, displayName,
 // description, and defaultSettings. The engine will pick up the type automatically.
 
-export type BotTypeId = "trendline" | "structure";
+export type BotTypeId = "trendline" | "structure" | "fibonacci";
 
 export interface BotTypeDefinition {
   id:             BotTypeId;
@@ -69,6 +69,35 @@ export const BOT_TYPE_REGISTRY: BotTypeDefinition[] = [
       allowAsianSession:  true,
       allowLondonSession: true,
       allowNySession:     true,
+    },
+  },
+  {
+    id:          "fibonacci",
+    displayName: "Fibonacci Bot",
+    description: "Trades pullbacks into the golden pocket (50-61.8% retracement) of the latest H4 impulse leg, in the direction of the prevailing trend, confirmed by a candlestick reversal — enters on weakness, unlike the trendline bot's breakout entries.",
+    defaultSettings: {
+      // No continuous confidence gate beyond the spec's own deterministic pass/fail checks
+      // (pocket + confirmation + trend + R:R) — kept at 0 so it never adds extra filtering
+      // the spec didn't ask for; the field exists for UI consistency with the other bot types.
+      minConfidenceScore: 0,
+      riskPercent:        1.0,
+      rewardRisk:         1.5, // only used by takeProfitMode "fixed_rr" — minReward below is the real gate
+      minReward:          1.5, // skip the trade if the chosen TP mode's R:R < this
+      pivotLookback:      3,
+      minSwingATR:        2.0,
+      pocketLow:           0.5,
+      pocketHigh:           0.618,
+      invalidationLevel:    0.786,
+      requireCloseInsidePocket: true,
+      stopMode:             "beyond_invalidation",
+      stopBufferATR:        0.5,
+      takeProfitMode:       "prior_swing",
+      // Bot-level "use the filter" switch — inert unless the DXY filter's own separate
+      // master toggle (off by default) is also enabled. See src/engines/dxy-filter.ts.
+      useDxyFilter:        true,
+      allowConcurrentWithTrendlineBot: false,
+      maxOpenPositions:    2,
+      allowDuplicatePairs: false,
     },
   },
 ];

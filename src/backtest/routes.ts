@@ -1,12 +1,13 @@
 import { Hono } from "hono";
 import type { Env } from "../index.ts";
-import { runTrendlineBacktest, runStructureBacktest, buildSummary, fetchCandles, trendbarCacheKey } from "./runner.ts";
+import { runTrendlineBacktest, runStructureBacktest, runFibonacciBacktest, buildSummary, fetchCandles, trendbarCacheKey } from "./runner.ts";
 import type { BacktestConfig, BacktestResult } from "./runner.ts";
 import { saveBotSignal } from "../bot/engine.ts";
 import { getBot } from "../bot/bot-types.ts";
 import { getAccount, getPrimaryAccountBalance } from "../ctrader/account-types.ts";
 import { pickTrendlineTunables } from "../engines/trendline.ts";
 import { pickStructureTunables } from "../engines/structure-signal.ts";
+import { pickFibonacciTunables } from "../engines/fibonacci-signal.ts";
 import { TradingService } from "../trading/service.ts";
 
 
@@ -51,6 +52,8 @@ export function createBacktestRouter() {
     // same as the live bot path in bot/engine.ts.
     const tunables = pickTrendlineTunables(botInstance.settings);
     const structureTunables = pickStructureTunables(botInstance.settings);
+    const fibonacciTunables = pickFibonacciTunables(botInstance.settings);
+    const minReward          = (botInstance.settings["minReward"] as number | undefined) ?? 1.5;
     const tpMode = (botInstance.settings["tpMode"] === "atLevel" ? "atLevel" : "rr") as "rr" | "atLevel";
     const requireCandleConfirmation = botInstance.settings["requireCandleConfirmation"] === true;
     const allowedSessions = {
@@ -76,6 +79,13 @@ export function createBacktestRouter() {
         const { signals, diagnostics, log } = botInstance.type === "structure"
           ? await runStructureBacktest(
               { pairs, fromMs, toMs, accountBalance, riskPercent, rewardRisk, minScore, minConfluence, maxOpenPositions, allowDuplicatePairs, tunables: structureTunables, tpMode, allowedSessions },
+              trading,
+              (msg) => console.log(`[backtest ${runId}] ${msg}`),
+              c.env.KV,
+            )
+          : botInstance.type === "fibonacci"
+          ? await runFibonacciBacktest(
+              { pairs, fromMs, toMs, accountBalance, riskPercent, rewardRisk, minReward, maxOpenPositions, allowDuplicatePairs, tunables: fibonacciTunables, allowedSessions },
               trading,
               (msg) => console.log(`[backtest ${runId}] ${msg}`),
               c.env.KV,

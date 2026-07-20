@@ -6,6 +6,8 @@ import { pipFactor, PIP_VALUE_GBP }        from "../engines/pip-value.ts";
 import { detectTrendlineSignal, pickTrendlineTunables, getTradingSession } from "../engines/trendline.ts";
 import type { TradingSession }             from "../engines/trendline.ts";
 import { detectStructureSignal, pickStructureTunables } from "../engines/structure-signal.ts";
+import { detectFibonacciSignal, pickFibonacciTunables } from "../engines/fibonacci-signal.ts";
+import { DxyFilter } from "../engines/dxy-filter.ts";
 import { storeTrendlineTrailState }        from "./monitor.ts";
 import { TradingService }                  from "../trading/service.ts";
 import { getAccount, updateAccountBalance, getPrimaryAccountBalance } from "../ctrader/account-types.ts";
@@ -246,6 +248,11 @@ export async function runBotScan(env: {
 
   const targetPairs = targetPairsOverride ?? (PHASE1_PAIRS as CurrencyPair[]);
 
+  // Disabled by default (see DxyFilter's own config) — a centrally-configured shared
+  // instance is wired in once the filter has its own on/off UI; until then this proves the
+  // call site works without changing any bot's live behavior.
+  const dxyFilter = new DxyFilter();
+
   for (const pair of targetPairs) {
     result.pairsScanned++;
 
@@ -469,6 +476,101 @@ export async function runBotScan(env: {
             await updateBotSignalStatus(env.DB, signal.id, "failed", { errorMessage: msg });
             result.signalsFailed++;
             result.errors.push(`${pair} ${stSig.direction}: ${msg}`);
+          }
+        }
+
+        continue;
+      }
+
+      if (botType === "fibonacci") {
+        const candles4H = await provider.getCandles(pair, "4H", 200);
+        const minReward = (env.botInstance?.settings["minReward"] as number | undefined) ?? 1.5;
+        const fibTunables = env.botInstance ? pickFibonacciTunables(env.botInstance.settings) : {};
+        const fibSig = detectFibonacciSignal(candles4H, rrRatio, minReward, fibTunables);
+        if (!fibSig) continue;
+        if (fibSig.score < minConfidenceScore) continue;
+
+        const confirmedHourUtc = new Date(fibSig.confirmedAt).getUTCHours();
+        if (!allowedSessions[getTradingSession(confirmedHourUtc)]) continue;
+
+        // DXY direction veto — inert by default (DxyFilter's own master toggle defaults off
+        // regardless of this bot's useDxyFilter setting; a shared, centrally-configured
+        // instance with real settings is wired in separately once the DXY filter has its
+        // own on/off UI). No-op today: proves the call site is correct without changing
+        // any live bot's behavior.
+        if (env.botInstance?.settings["useDxyFilter"] === true) {
+          const dxyGate = dxyFilter.isTradeAllowed(pair, fibSig.direction, botId);
+          if (!dxyGate.allowed) continue;
+        }
+
+        result.signalsFound++;
+
+        const lots = calcLots(riskAmount, pair, fibSig.entryPrice, fibSig.stopLoss);
+        if (lots <= 0) continue;
+
+        const signal: BotSignal = {
+          id:               crypto.randomUUID(),
+          botId,
+          pair,
+          direction:        fibSig.direction,
+          entryPrice:       fibSig.entryPrice,
+          stopLoss:         fibSig.stopLoss,
+          takeProfit:       fibSig.takeProfit,
+          lots,
+          score:            fibSig.score,
+          recommendationId: null,
+          reasons:          fibSig.reasons,
+          status:           "pending",
+          createdAt:        Date.now(),
+          expiresAt:        Date.now() + 4 * 60 * 60 * 1000,
+          executedAt:       null,
+          ctraderPositionId: null,
+          journalId:        null,
+          rejectionReason:  null,
+          errorMessage:     null,
+          source:           'live',
+          backtestRunId:    null,
+          signalType:       "fibonacci_pullback",
+          signalTimeframe:  "4H",
+          signalConfidence: fibSig.score,
+          trend:            fibSig.direction === "buy" ? "bullish" : "bearish",
+          structure:        null,
+          mtfBias:          null,
+          mtfLabel:         null,
+          atr:              null,
+          inAoi:            false,
+          fibLabel:         `${fibSig.patternType}`,
+          tradeClass:       "fibonacci",
+          zoneType:         null,
+          patternType:      fibSig.patternType,
+          outcome:          null,
+          closePrice:       null,
+          closeTime:        null,
+          pnlPips:          null,
+          pnlGbp:           null,
+          lineType:         null,
+          lineP1Ts:         null,
+          lineP2Ts:         null,
+          zoneLow:          fibSig.legOriginPrice,
+          zoneHigh:         fibSig.legExtremePrice,
+        };
+
+        if (mode === "approval") {
+          await saveBotSignal(env.DB, signal);
+          result.signalsQueued++;
+        } else {
+          try {
+            if (!trading) throw new Error("No cTrader token");
+            await saveBotSignal(env.DB, signal);
+            await executeSignal(signal, env.DB, env.KV, trading, "market");
+            openCount++;
+            openPositionPairs.add(pair);
+            result.signalsExecuted++;
+          } catch (e) {
+            const msg = (e as Error).message;
+            await updateBotSignalStatus(env.DB, signal.id, "failed", { errorMessage: msg });
+            result.signalsFailed++;
+            result.errors.push(`${pair} ${fibSig.direction}: ${msg}`);
           }
         }
 

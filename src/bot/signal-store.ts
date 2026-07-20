@@ -56,8 +56,9 @@ export interface BotSignal {
   lineType:           'resistance' | 'support' | null;
   lineP1Ts:           number | null;
   lineP2Ts:           number | null;
-  // The Area of Interest bounds a structure-bot signal was based on. Null for non-structure
-  // signal types — mirrors lineType/lineP1Ts/lineP2Ts's "null for other signal types" pattern.
+  // The price bounds a signal was based on — the Area of Interest for a structure-bot
+  // signal, or the impulse leg's origin/extreme price for a fibonacci-bot signal (reused
+  // rather than adding near-identical columns a second time). Null for trendline signals.
   zoneLow:            number | null;
   zoneHigh:           number | null;
 }
