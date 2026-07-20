@@ -1,11 +1,12 @@
 import { Hono } from "hono";
 import type { Env } from "../index.ts";
-import { runTrendlineBacktest, buildSummary, fetchCandles, trendbarCacheKey } from "./runner.ts";
+import { runTrendlineBacktest, runStructureBacktest, buildSummary, fetchCandles, trendbarCacheKey } from "./runner.ts";
 import type { BacktestConfig, BacktestResult } from "./runner.ts";
 import { saveBotSignal } from "../bot/engine.ts";
 import { getBot } from "../bot/bot-types.ts";
 import { getAccount, getPrimaryAccountBalance } from "../ctrader/account-types.ts";
 import { pickTrendlineTunables } from "../engines/trendline.ts";
+import { pickStructureTunables } from "../engines/structure-signal.ts";
 import { TradingService } from "../trading/service.ts";
 
 
@@ -38,12 +39,14 @@ export function createBacktestRouter() {
     const riskPercent        = (botInstance.settings["riskPercent"]  as number | undefined) ?? (riskRaw?.riskPercent  ?? 1);
     const rewardRisk         = (botInstance.settings["rewardRisk"]   as number | undefined) ?? (riskRaw?.rewardRisk   ?? 1.5);
     const minScore           = botInstance.settings["minConfidenceScore"] as number;
+    const minConfluence      = (botInstance.settings["minConfluence"] as number | undefined) ?? 2;
     const maxOpenPositions   = botInstance.settings["maxOpenPositions"]   as number;
     const allowDuplicatePairs = botInstance.settings["allowDuplicatePairs"] as boolean;
     const swingLookback      = (botInstance.settings["swingLookback"] as number | undefined) ?? 5;
-    // Trade-setup tuning — undefined fields fall back to DEFAULT_TRENDLINE_TUNABLES inside
-    // detectTrendlineSignal, same as the live bot path in bot/engine.ts.
+    // Trade-setup tuning — undefined fields fall back to each engine's own DEFAULT_*_TUNABLES,
+    // same as the live bot path in bot/engine.ts.
     const tunables = pickTrendlineTunables(botInstance.settings);
+    const structureTunables = pickStructureTunables(botInstance.settings);
     const tpMode = (botInstance.settings["tpMode"] === "atLevel" ? "atLevel" : "rr") as "rr" | "atLevel";
     const requireCandleConfirmation = botInstance.settings["requireCandleConfirmation"] === true;
     const allowedSessions = {
@@ -66,12 +69,19 @@ export function createBacktestRouter() {
 
     const runBacktest = async () => {
       try {
-        const { signals, diagnostics, log } = await runTrendlineBacktest(
-          { pairs, fromMs, toMs, accountBalance, riskPercent, rewardRisk, minScore, maxOpenPositions, allowDuplicatePairs, swingLookback, tunables, tpMode, requireCandleConfirmation, allowedSessions },
-          trading,
-          (msg) => console.log(`[backtest ${runId}] ${msg}`),
-          c.env.KV,
-        );
+        const { signals, diagnostics, log } = botInstance.type === "structure"
+          ? await runStructureBacktest(
+              { pairs, fromMs, toMs, accountBalance, riskPercent, rewardRisk, minScore, minConfluence, maxOpenPositions, allowDuplicatePairs, tunables: structureTunables, tpMode, allowedSessions },
+              trading,
+              (msg) => console.log(`[backtest ${runId}] ${msg}`),
+              c.env.KV,
+            )
+          : await runTrendlineBacktest(
+              { pairs, fromMs, toMs, accountBalance, riskPercent, rewardRisk, minScore, maxOpenPositions, allowDuplicatePairs, swingLookback, tunables, tpMode, requireCandleConfirmation, allowedSessions },
+              trading,
+              (msg) => console.log(`[backtest ${runId}] ${msg}`),
+              c.env.KV,
+            );
 
         for (const signal of signals) {
           signal.backtestRunId = runId;

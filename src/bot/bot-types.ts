@@ -4,7 +4,7 @@ import type { CurrencyPair } from "../types/market.ts";
 // To add a new bot type: add an entry to BOT_TYPE_REGISTRY with id, displayName,
 // description, and defaultSettings. The engine will pick up the type automatically.
 
-export type BotTypeId = "trendline";
+export type BotTypeId = "trendline" | "structure";
 
 export interface BotTypeDefinition {
   id:             BotTypeId;
@@ -45,6 +45,27 @@ export const BOT_TYPE_REGISTRY: BotTypeDefinition[] = [
       // star) in the break direction, not just a close on the right side of the line.
       // Off by default — matches previous behavior, which never checked this.
       requireCandleConfirmation: false,
+    },
+  },
+  {
+    id:          "structure",
+    displayName: "Structure Bot",
+    description: "Trades support/resistance zone bounces — enters on a candlestick reversal confirming a bounce at a confluence of S/R levels (an Area of Interest), rather than a trendline break.",
+    defaultSettings: {
+      minConfidenceScore: 60,
+      minConfluence:      2,
+      riskPercent:        1.0,
+      rewardRisk:         3.0,
+      // SL distance beyond the AOI's defining swing point, in ATR multiples.
+      // See src/engines/structure-signal.ts DEFAULT_STRUCTURE_TUNABLES.
+      slBufferAtr:        0.2,
+      // "rr" = fixed reward:risk multiple of the stop (default). "atLevel" = target the
+      // next opposing S/R zone instead, falling back to "rr" if none is found ahead.
+      tpMode:             "rr",
+      // Session filter — all true by default, same convention as the trendline bot.
+      allowAsianSession:  true,
+      allowLondonSession: true,
+      allowNySession:     true,
     },
   },
 ];

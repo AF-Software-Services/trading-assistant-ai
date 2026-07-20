@@ -1524,6 +1524,11 @@ html, body {
   color: var(--buy);
 }
 
+.bot-type-badge.structure {
+  background: rgba(219,109,40,0.12);
+  color: #d97706;
+}
+
 /* ── Account rows ────────────────────────────────────────────────────────────── */
 .account-row {
   display: flex;

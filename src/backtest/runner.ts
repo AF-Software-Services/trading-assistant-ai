@@ -4,6 +4,8 @@ import { calcLots } from "../bot/engine.ts";
 import type { BotSignal } from "../bot/engine.ts";
 import { detectTrendlineSignal, getTradingSession } from "../engines/trendline.ts";
 import type { TrendlineTunables, TpMode, TradingSession } from "../engines/trendline.ts";
+import { detectStructureSignal } from "../engines/structure-signal.ts";
+import type { StructureTunables } from "../engines/structure-signal.ts";
 import type { TradingService } from "../trading/service.ts";
 import { pipFactor, PIP_VALUE_GBP } from "../engines/pip-value.ts";
 
@@ -22,6 +24,22 @@ export interface BacktestConfig {
   tunables:             Partial<TrendlineTunables>;
   tpMode:               TpMode;
   requireCandleConfirmation: boolean;
+  allowedSessions:      Record<TradingSession, boolean>;
+}
+
+export interface StructureBacktestConfig {
+  pairs: string[];
+  fromMs: number;
+  toMs: number;
+  accountBalance: number;
+  riskPercent: number;
+  rewardRisk: number;
+  minScore: number;
+  minConfluence:       number;
+  maxOpenPositions:    number;
+  allowDuplicatePairs: boolean;
+  tunables:             Partial<StructureTunables>;
+  tpMode:               TpMode;
   allowedSessions:      Record<TradingSession, boolean>;
 }
 
@@ -359,6 +377,8 @@ export async function runTrendlineBacktest(
         lineType,
         lineP1Ts,
         lineP2Ts,
+        zoneLow: null,
+        zoneHigh: null,
       };
 
       allSignals.push(signal);
@@ -366,6 +386,189 @@ export async function runTrendlineBacktest(
 
     const pairCount = allSignals.filter(s => s.pair === pair).length;
     progress(`${pair}: ${pairCount} trendline signals`);
+  }
+
+  return { signals: allSignals, diagnostics: rejections, log };
+}
+
+export async function runStructureBacktest(
+  config: StructureBacktestConfig,
+  trading: TradingService,
+  onProgress?: (msg: string) => void,
+  kv?: KVNamespace,
+): Promise<BacktestResult> {
+  const allSignals: BotSignal[] = [];
+  const rejections: Record<string, number> = {};
+  const log: string[] = [];
+  const progress = (msg: string) => { log.push(msg); onProgress?.(msg); };
+
+  // Shared across all pairs — mirrors runTrendlineBacktest's live-bot-matching constraints.
+  const openPositions: Array<{ pair: string; closeTime: number }> = [];
+  const lastSignalMs: Record<string, number> = {};
+  const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+
+  progress(`Fetching data for ${config.pairs.length} pairs…`);
+  const fetchResults = await Promise.all(config.pairs.map(async (pair) => {
+    try {
+      const [rW, rD, r4H] = await Promise.all([
+        fetchCandles(pair, "W",  config.toMs, trading, kv),
+        fetchCandles(pair, "D",  config.toMs, trading, kv),
+        fetchCandles(pair, "4H", config.toMs, trading, kv),
+      ]);
+      return { pair, candlesW: rW.candles, candlesD: rD.candles, candles4H: r4H.candles, error: null as string | null };
+    } catch (err) {
+      return { pair, candlesW: [] as Candle[], candlesD: [] as Candle[], candles4H: [] as Candle[], error: (err as Error).message };
+    }
+  }));
+
+  for (const { pair, candlesW, candlesD, candles4H, error } of fetchResults) {
+    if (error) {
+      progress(`Error fetching ${pair}: ${error}`);
+      continue;
+    }
+
+    progress(`${pair}: W=${candlesW.length} D=${candlesD.length} 4H=${candles4H.length} candles`);
+
+    const riskAmount = config.accountBalance * (config.riskPercent / 100);
+    const pipVal     = PIP_VALUE_GBP[pair] ?? 7.50;
+
+    const MIN_LOOKBACK = 50;
+
+    let periodStart = candles4H.findIndex(c => c.timestamp >= config.fromMs);
+    if (periodStart === -1) { progress(`${pair}: no candles in test period`); continue; }
+    let periodEnd = candles4H.length;
+    for (let k = periodStart; k < candles4H.length; k++) {
+      if (candles4H[k]!.timestamp > config.toMs) { periodEnd = k; break; }
+    }
+    const inPeriodCount = periodEnd - periodStart;
+    progress(`${pair}: ${inPeriodCount} 4H candles in test period`);
+
+    for (let i = 0; i < inPeriodCount; i++) {
+      if (i % 20 === 0 && i > 0) await new Promise(r => setTimeout(r, 0));
+
+      const absIdx = periodStart + i;
+      const history = candles4H.slice(Math.max(0, absIdx - 199), absIdx + 1);
+      if (history.length < MIN_LOOKBACK) {
+        rejections["insufficient_data"] = (rejections["insufficient_data"] ?? 0) + 1;
+        continue;
+      }
+
+      const cutoff = candles4H[absIdx]!.timestamp;
+
+      // Daily/weekly history: walk backward to find bars up to this bar's timestamp —
+      // mirrors runTrendlineBacktest's dHistory windowing.
+      let dEnd = candlesD.length;
+      for (let k = candlesD.length - 1; k >= 0; k--) {
+        if (candlesD[k]!.timestamp <= cutoff) { dEnd = k + 1; break; }
+      }
+      const dHistory = candlesD.slice(Math.max(0, dEnd - 90), dEnd);
+
+      let wEnd = candlesW.length;
+      for (let k = candlesW.length - 1; k >= 0; k--) {
+        if (candlesW[k]!.timestamp <= cutoff) { wEnd = k + 1; break; }
+      }
+      const wHistory = candlesW.slice(Math.max(0, wEnd - 60), wEnd);
+
+      // ── Live-bot constraints (must match runBotScan exactly) ──────────────
+      for (let j = openPositions.length - 1; j >= 0; j--) {
+        if (openPositions[j]!.closeTime <= cutoff) openPositions.splice(j, 1);
+      }
+      if (!config.allowDuplicatePairs && openPositions.some(p => p.pair === pair)) {
+        rejections["position_open"] = (rejections["position_open"] ?? 0) + 1;
+        continue;
+      }
+      if (openPositions.length >= config.maxOpenPositions) {
+        rejections["max_positions"] = (rejections["max_positions"] ?? 0) + 1;
+        continue;
+      }
+      if (cutoff - (lastSignalMs[pair] ?? 0) < FOUR_HOURS_MS) {
+        rejections["cooldown"] = (rejections["cooldown"] ?? 0) + 1;
+        continue;
+      }
+
+      const sig = detectStructureSignal(wHistory, dHistory, history, config.rewardRisk, config.minConfluence, config.tunables, config.tpMode);
+      if (!sig) {
+        rejections["no_signal"] = (rejections["no_signal"] ?? 0) + 1;
+        continue;
+      }
+
+      if (sig.score < config.minScore) {
+        rejections["score_too_low"] = (rejections["score_too_low"] ?? 0) + 1;
+        continue;
+      }
+
+      const confirmedHourUtc = new Date(sig.confirmedAt).getUTCHours();
+      if (!config.allowedSessions[getTradingSession(confirmedHourUtc)]) {
+        rejections["session_filter"] = (rejections["session_filter"] ?? 0) + 1;
+        continue;
+      }
+
+      const lots = calcLots(riskAmount, pair, sig.entryPrice, sig.stopLoss);
+      if (lots <= 0) continue;
+
+      const forwardCandles = candles4H.slice(absIdx + 1);
+      const outcomeResult = determineOutcome(
+        { pair, direction: sig.direction, entryPrice: sig.entryPrice, stopLoss: sig.stopLoss, takeProfit: sig.takeProfit },
+        forwardCandles,
+      );
+
+      openPositions.push({ pair, closeTime: outcomeResult.closeTime });
+      lastSignalMs[pair] = cutoff;
+
+      const pnlGbp = outcomeResult.pnlPips * lots * pipVal;
+
+      const signal: BotSignal = {
+        id:               crypto.randomUUID(),
+        botId:            "backtest-structure",
+        pair:             pair as CurrencyPair,
+        direction:        sig.direction,
+        entryPrice:       sig.entryPrice,
+        stopLoss:         sig.stopLoss,
+        takeProfit:       sig.takeProfit,
+        lots,
+        score:            sig.score,
+        recommendationId: null,
+        reasons:          sig.reasons,
+        status:           "executed",
+        createdAt:        cutoff,
+        expiresAt:        cutoff + 4 * 60 * 60 * 1000,
+        executedAt:       cutoff,
+        ctraderPositionId: null,
+        journalId:        null,
+        rejectionReason:  null,
+        errorMessage:     null,
+        source:           "backtest",
+        backtestRunId:    null, // set by routes.ts
+        signalType:       "structure_zone_bounce",
+        signalTimeframe:  "4H",
+        signalConfidence: sig.score,
+        trend:            sig.direction === "buy" ? "bullish" : "bearish",
+        structure:        null,
+        mtfBias:          null,
+        mtfLabel:         null,
+        atr:              null,
+        inAoi:            true,
+        fibLabel:         null,
+        tradeClass:       "structure",
+        zoneType:         sig.zoneType,
+        patternType:      sig.patternType,
+        outcome:          outcomeResult.outcome,
+        closePrice:       +outcomeResult.closePrice.toFixed(5),
+        closeTime:        outcomeResult.closeTime,
+        pnlPips:          +outcomeResult.pnlPips.toFixed(1),
+        pnlGbp:           +pnlGbp.toFixed(2),
+        lineType:         null,
+        lineP1Ts:         null,
+        lineP2Ts:         null,
+        zoneLow:          sig.zoneLow,
+        zoneHigh:         sig.zoneHigh,
+      };
+
+      allSignals.push(signal);
+    }
+
+    const pairCount = allSignals.filter(s => s.pair === pair).length;
+    progress(`${pair}: ${pairCount} structure signals`);
   }
 
   return { signals: allSignals, diagnostics: rejections, log };
