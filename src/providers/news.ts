@@ -14,6 +14,20 @@ const PAIR_KEYWORDS: Record<string, string[]> = {
   "USD/JPY": ["JPY", "yen", "USD", "dollar", "BOJ", "Bank of Japan", "Fed"],
   "EUR/GBP": ["EUR", "euro", "GBP", "pound", "ECB", "BOE"],
   "AUD/USD": ["AUD", "Australian", "USD", "dollar", "RBA", "Reserve Bank of Australia", "Fed"],
+  // Indices — added alongside the cTrader migration's 10 new instruments, but this table
+  // was never updated at the time, so news lookups for any of these silently returned zero
+  // headlines (isRelevant() treats a missing entry as "not relevant", not an error).
+  "US500":     ["S&P 500", "S&P", "Wall Street", "US stocks", "equities", "Fed", "Federal Reserve"],
+  "NAS100":    ["Nasdaq", "tech stocks", "Wall Street", "US stocks", "equities", "Fed"],
+  "GER40":     ["DAX", "German stocks", "Germany", "ECB", "European stocks", "eurozone"],
+  "UK100":     ["FTSE", "UK stocks", "London", "BOE", "Bank of England", "British"],
+  // Commodities
+  "XAU/USD":   ["gold", "XAU", "bullion", "safe haven", "Fed", "dollar"],
+  "XAG/USD":   ["silver", "XAG", "bullion", "precious metal"],
+  "WTI/USD":   ["WTI", "crude oil", "oil price", "OPEC", "crude"],
+  "BRENT/USD": ["Brent", "crude oil", "oil price", "OPEC"],
+  "NATGAS":    ["natural gas", "nat gas", "gas price", "LNG"],
+  "COPPER":    ["copper", "industrial metal", "base metal", "China demand"],
 };
 
 const BULLISH_WORDS = ["rally", "rise", "gain", "surge", "strength", "bullish", "higher", "uptick", "recover", "bounce", "hawkish", "beat", "strong"];

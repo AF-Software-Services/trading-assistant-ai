@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { CurrencyPair, Timeframe } from "../types/market.ts";
-import { PHASE1_PAIRS, ALL_TRADEABLE_PAIRS } from "../types/market.ts";
+import { ALL_TRADEABLE_PAIRS } from "../types/market.ts";
 import { createMarketDataProvider } from "../providers/factory.ts";
 import { TradingService } from "../trading/service.ts";
 import { analyseMarketStructure } from "../engines/market-structure.ts";
@@ -310,7 +310,7 @@ export function createApiRouter(): Hono<{ Bindings: Env }> {
   // Returns recent RSS headlines relevant to a currency pair, cached 1hr in KV.
   app.get("/news/:pair", async (c) => {
     const pair = decodeURIComponent(c.req.param("pair"));
-    if (!PHASE1_PAIRS.includes(pair as any)) return c.json({ error: "Unknown pair" }, 400);
+    if (!ALL_TRADEABLE_PAIRS.includes(pair as any)) return c.json({ error: "Unknown pair" }, 400);
     try {
       const news = await fetchNewsForPair(pair, c.env.KV);
       return c.json(news);
