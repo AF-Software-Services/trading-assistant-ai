@@ -6,6 +6,18 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 8787
+    },
+    {
+      "name": "dev-remote",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:remote"],
+      "port": 8787
+    },
+    {
+      "name": "ui",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:ui"],
+      "port": 5173
     }
   ]
 }
