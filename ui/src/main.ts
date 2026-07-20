@@ -2049,8 +2049,6 @@ const PAIR_CATEGORIES: Record<string, string[]> = {
 }
 const ALL_PAIRS = Object.values(PAIR_CATEGORIES).flat()
 
-let botStatusIntervalId: ReturnType<typeof setInterval> | null = null
-
 function initBot(): void {
   const botList    = document.getElementById('bot-list')!
   const signalList = document.getElementById('bot-signals-list')!
@@ -2128,7 +2126,9 @@ function initBot(): void {
     const typeClass = bot.type === 'trendline' ? 'trendline' : ''
     const pairPills = Object.entries(PAIR_CATEGORIES).map(([category, pairs]) => {
       const pills = pairs.map(p => {
-        const active = bot.pairs.length === 0 || bot.pairs.includes(p)
+        // Empty pairs falls back to forex-only in the backend scan (bot/engine.ts), not all 16 —
+        // mirror that here instead of highlighting every pill.
+        const active = bot.pairs.length === 0 ? PAIR_CATEGORIES.Forex.includes(p) : bot.pairs.includes(p)
         return `<span class="bot-pair-pill ${active ? 'active' : ''}" data-pair="${p}" data-bot-id="${bot.id}">${p}</span>`
       }).join('')
       return `<div class="pair-category-group">
@@ -2645,14 +2645,9 @@ function initBot(): void {
 
   // Wait for accounts to have loaded at least once so the first render's account dropdowns
   // are correct from the start, rather than racing loadAccounts() and rendering "— No account —"
-  // for a bot that actually does have one, until the next 30s poll self-corrects it.
+  // for a bot that actually does have one.
   ;(initialAccountsLoad ?? Promise.resolve()).then(loadBotStatus)
   loadCronLog()
-  // Guard against duplicate polling loops if initBot() is ever invoked more than once
-  // (e.g. a future re-init path) — without this, each call stacks another interval that
-  // never gets cleared, and they compound silently for as long as the tab stays open.
-  if (botStatusIntervalId !== null) clearInterval(botStatusIntervalId)
-  botStatusIntervalId = setInterval(loadBotStatus, 30_000)
 }
 
 // ── Backtest ───────────────────────────────────────────────────────────────

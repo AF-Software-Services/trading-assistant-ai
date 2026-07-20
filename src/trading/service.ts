@@ -90,8 +90,8 @@ export class TradingService {
     return this.client.cancelOrder(orderId);
   }
 
-  async amendPosition(positionId: number, stopLoss: number, takeProfit?: number): Promise<void> {
-    return this.client.amendPosition(positionId, stopLoss, takeProfit);
+  async amendPosition(positionId: number, stopLoss: number, takeProfit?: number, pair?: string): Promise<void> {
+    return this.client.amendPosition(positionId, stopLoss, takeProfit, pair);
   }
 
   async getHistory(fromMs: number, toMs: number): Promise<Deal[]> {

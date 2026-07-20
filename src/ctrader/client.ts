@@ -1,5 +1,6 @@
 // @ts-ignore — cloudflare:sockets is a built-in Workers module
 import { connect } from 'cloudflare:sockets';
+import { roundToDigits } from '../engines/trendline.ts';
 
 const DEMO_HOST = 'demo.ctraderapi.com';
 const LIVE_HOST = 'live.ctraderapi.com';
@@ -269,6 +270,7 @@ const SYMBOL_BY_ID_REQ_SCHEMA: MessageSchema = {
 };
 const SYMBOL_SCHEMA: MessageSchema = {
   symbolId:   { no: 1,  type: { t: 'varint' } },
+  digits:     { no: 2,  type: { t: 'varint' } },
   minVolume:  { no: 10, type: { t: 'varint' } },
   stepVolume: { no: 11, type: { t: 'varint' } },
   lotSize:    { no: 30, type: { t: 'varint' } },
@@ -410,8 +412,8 @@ function formatPair(raw: string): string {
   return raw.length === 6 ? `${raw.slice(0, 3)}/${raw.slice(3)}` : raw;
 }
 
-// Volume constraint cache (symbolId → broker constraints)
-const symbolInfoCache = new Map<number, { lotSize: number; stepVolume: number; minVolume: number }>();
+// Volume/price constraint cache (symbolId → broker constraints)
+const symbolInfoCache = new Map<number, { lotSize: number; stepVolume: number; minVolume: number; digits: number | undefined }>();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -457,7 +459,7 @@ async function fetchSymbolInfo(
   conn: TcpConnection,
   accountId: number,
   symbolId: number,
-): Promise<{ lotSize: number; stepVolume: number; minVolume: number }> {
+): Promise<{ lotSize: number; stepVolume: number; minVolume: number; digits: number | undefined }> {
   const cached = symbolInfoCache.get(symbolId);
   if (cached) return cached;
 
@@ -471,6 +473,7 @@ async function fetchSymbolInfo(
     lotSize:    ((sym['lotSize']    as number | undefined) ?? 100000),
     stepVolume: ((sym['stepVolume'] as number | undefined) ?? 100000),
     minVolume:  ((sym['minVolume']  as number | undefined) ?? 100000),
+    digits:     (sym['digits'] as number | undefined),
   };
   symbolInfoCache.set(symbolId, info);
   return info;
@@ -937,12 +940,19 @@ export class CTraderClient {
       const symbolId = lookupSymbolId(this.cfg.accountId, params.pair);
       if (!symbolId) throw new Error(`Unknown pair for this broker: ${params.pair}`);
 
-      // Fetch broker-specific lotSize / stepVolume (cached after first call per symbolId)
-      const { lotSize, stepVolume, minVolume } = await fetchSymbolInfo(conn, this.cfg.accountId, symbolId);
+      // Fetch broker-specific lotSize / stepVolume / digits (cached after first call per symbolId)
+      const { lotSize, stepVolume, minVolume, digits } = await fetchSymbolInfo(conn, this.cfg.accountId, symbolId);
 
       // Volume in cTrader "cents" (1/100 of a unit). Round to nearest stepVolume.
       const rawVolume = Math.round(params.lots * lotSize);
       const volume    = Math.max(minVolume, Math.round(rawVolume / stepVolume) * stepVolume);
+
+      // Re-round to the broker's own decimal precision right before sending — the caller's
+      // prices were already rounded by engines/trendline.ts's roundPrice, but that's only a
+      // "JPY or not" guess and gets indices/commodities' real digit count wrong, which the
+      // broker otherwise rejects the whole order for. Falls back to the caller's value if the
+      // broker didn't return a digits field for this symbol.
+      const round = (p: number) => digits !== undefined ? roundToDigits(p, digits) : p;
 
       const payload: Record<string, unknown> = {
         ctidTraderAccountId: this.cfg.accountId,
@@ -951,9 +961,9 @@ export class CTraderClient {
         tradeSide: params.direction === 'buy' ? TRADE_SIDE.BUY : TRADE_SIDE.SELL,
         volume,
       };
-      if (params.limitPrice) { payload.limitPrice = params.limitPrice; payload.timeInForce = TIME_IN_FORCE_GTC; }
-      if (params.stopLoss)   payload.stopLoss   = params.stopLoss;
-      if (params.takeProfit) payload.takeProfit = params.takeProfit;
+      if (params.limitPrice) { payload.limitPrice = round(params.limitPrice); payload.timeInForce = TIME_IN_FORCE_GTC; }
+      if (params.stopLoss)   payload.stopLoss   = round(params.stopLoss);
+      if (params.takeProfit) payload.takeProfit = round(params.takeProfit);
 
       await conn.send(PT.NEW_ORDER_REQ, NEW_ORDER_REQ_SCHEMA, payload);
       // Limit orders (retest entries) can sit pending for a long time before price reaches
@@ -966,12 +976,26 @@ export class CTraderClient {
     } finally { conn.close(); }
   }
 
-  async amendPosition(positionId: number, stopLoss: number, takeProfit?: number): Promise<void> {
+  // `pair` is optional only because one manual UI route doesn't have it on hand yet — when
+  // given, prices are re-rounded to the broker's real digits for this symbol, same as
+  // placeOrder(); without it, prices are sent as the caller rounded them (unchanged behavior).
+  async amendPosition(positionId: number, stopLoss: number, takeProfit?: number, pair?: string): Promise<void> {
     const conn = await this.connect();
     try {
       await this.auth(conn);
-      const payload: Record<string, unknown> = { ctidTraderAccountId: this.cfg.accountId, positionId, stopLoss };
-      if (takeProfit !== undefined) payload.takeProfit = takeProfit;
+
+      let round = (p: number) => p;
+      if (pair) {
+        await ensureSymbolCache(conn, this.cfg.accountId);
+        const symbolId = lookupSymbolId(this.cfg.accountId, pair);
+        if (symbolId) {
+          const { digits } = await fetchSymbolInfo(conn, this.cfg.accountId, symbolId);
+          if (digits !== undefined) round = (p: number) => roundToDigits(p, digits);
+        }
+      }
+
+      const payload: Record<string, unknown> = { ctidTraderAccountId: this.cfg.accountId, positionId, stopLoss: round(stopLoss) };
+      if (takeProfit !== undefined) payload.takeProfit = round(takeProfit);
       await conn.send(PT.AMEND_POSITION_SLTP_REQ, AMEND_POSITION_SLTP_REQ_SCHEMA, payload);
       await conn.waitForExecution(EXECUTION_EVENT_SCHEMA);
     } finally { conn.close(); }

@@ -376,14 +376,14 @@ export function createCTraderRouter() {
   // ── Amend position SL/TP (account-aware) ──────────────────────────────────────
   app.post('/api/v1/ctrader/positions/:id/amend', async (c) => {
     const positionId = parseInt(c.req.param('id'));
-    const body = await c.req.json<{ stopLoss: number; takeProfit?: number; accountId?: string }>()
+    const body = await c.req.json<{ stopLoss: number; takeProfit?: number; accountId?: string; pair?: string }>()
       .catch(() => null);
     if (!body || !body.stopLoss) return c.json({ error: 'stopLoss is required' }, 400);
     try {
       const svc = body.accountId
         ? await connectAccount(c.env, body.accountId)
         : await TradingService.connect(c.env);
-      await svc.amendPosition(positionId, body.stopLoss, body.takeProfit);
+      await svc.amendPosition(positionId, body.stopLoss, body.takeProfit, body.pair);
       return c.json({ success: true, positionId });
     } catch (e) {
       const msg = (e as Error).message;
