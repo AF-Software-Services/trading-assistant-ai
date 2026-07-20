@@ -2971,8 +2971,19 @@ async function loadBacktestBotSelector(): Promise<void> {
   btBotId.value   = first.id
   btBotType.value = first.type
 
-  // Wire dropdown
-  selected?.addEventListener('click', () => optionsEl.classList.toggle('hidden'))
+  // Wire dropdown — this function reruns every time bots are created/promoted/deleted (see
+  // callers below), but `selected` and `btSelect` are persistent DOM nodes across those
+  // reruns, unlike the `.custom-select-option` elements (recreated fresh each time via the
+  // innerHTML assignment above). Guard against re-attaching the same listener on every rerun,
+  // which stacked up silently and made clicking the dropdown toggle it open+closed in the same
+  // instant (looked like it "didn't open" until a full page reload reset the DOM).
+  if (!selected.dataset.wired) {
+    selected.dataset.wired = '1'
+    selected.addEventListener('click', () => optionsEl.classList.toggle('hidden'))
+    document.addEventListener('click', e => {
+      if (!btSelect.contains(e.target as Node)) optionsEl.classList.add('hidden')
+    })
+  }
   optionsEl.querySelectorAll('.custom-select-option').forEach(opt => {
     opt.addEventListener('click', () => {
       const el = opt as HTMLElement
@@ -2983,9 +2994,6 @@ async function loadBacktestBotSelector(): Promise<void> {
       el.classList.add('active')
       optionsEl.classList.add('hidden')
     })
-  })
-  document.addEventListener('click', e => {
-    if (!btSelect.contains(e.target as Node)) optionsEl.classList.add('hidden')
   })
 }
 
