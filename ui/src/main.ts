@@ -2236,6 +2236,12 @@ function buildSettingFields(bot: any): string {
             data-bot-id="${bot.id}" data-key="requireCandleConfirmation" />
           <span style="font-size:10px;color:var(--muted)">require engulfing/hammer at retest</span>
         </div>
+        <span class="bot-card-label" style="margin-left:12px">DXY Filter</span>
+        <div class="bot-card-setting" style="align-items:center;gap:6px">
+          <input type="checkbox" ${bot.settings.useDxyFilter ? 'checked' : ''}
+            data-bot-id="${bot.id}" data-key="useDxyFilter" />
+          <span style="font-size:10px;color:var(--muted)">don't fight the dollar</span>
+        </div>
       </div>
     </details>` : bot.type === 'fibonacci' ? `
     <div class="bot-card-row">
@@ -2342,6 +2348,37 @@ function initBot(): void {
   const scanAllBtn = document.getElementById('bot-scan-all-btn')!
   const addBtn     = document.getElementById('bot-add-btn')!
   const scanStatus = document.getElementById('bot-scan-status')!
+
+  // ── DXY Regime Filter — shared master toggle, off by default ────────────────
+  const dxyEnabledEl  = document.getElementById('dxy-filter-enabled')     as HTMLInputElement
+  const dxyExposureEl = document.getElementById('dxy-filter-max-exposure') as HTMLInputElement
+  const dxyStatusEl   = document.getElementById('dxy-filter-status')!
+
+  fetch('/api/v1/settings/dxy-filter').then(r => r.json()).then(settings => {
+    dxyEnabledEl.checked = settings.enabled === true
+    dxyExposureEl.value  = settings.maxNetUsdExposure != null ? String(settings.maxNetUsdExposure) : ''
+  }).catch(() => {})
+
+  const saveDxySettings = async () => {
+    dxyStatusEl.textContent = 'Saving…'
+    const body = {
+      enabled: dxyEnabledEl.checked,
+      maxNetUsdExposure: dxyExposureEl.value.trim() === '' ? null : Number(dxyExposureEl.value),
+    }
+    try {
+      await fetch('/api/v1/settings/dxy-filter', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      dxyStatusEl.textContent = 'Saved'
+      setTimeout(() => { dxyStatusEl.textContent = '' }, 2000)
+    } catch {
+      dxyStatusEl.textContent = 'Failed to save'
+    }
+  }
+  dxyEnabledEl.addEventListener('change', saveDxySettings)
+  dxyExposureEl.addEventListener('change', saveDxySettings)
 
   // ── Add bot modal ──────────────────────────────────────────────────────────
   const modal          = document.getElementById('bot-add-modal')!

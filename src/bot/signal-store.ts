@@ -180,6 +180,27 @@ export async function hasRecentLossOnLine(
   return row !== null;
 }
 
+// Cross-bot-type deconfliction (e.g. the Fibonacci bot's allowConcurrentWithTrendlineBot
+// setting) — is there a still-open, live position on this pair opened by a bot of the given
+// type on the same account? "Still open" mirrors monitor.ts's own definition: status
+// 'executed', source 'live', a real ctraderPositionId assigned. accountId null matches the
+// legacy no-account bot the same way bots.account_id IS NULL does.
+export async function hasOpenPositionFromBotType(
+  db: D1Database,
+  pair: string,
+  botType: string,
+  accountId: string | null,
+): Promise<boolean> {
+  const row = await db.prepare(
+    `SELECT 1 FROM bot_signals s
+     JOIN bots b ON b.id = s.bot_id
+     WHERE s.pair = ? AND s.status = 'executed' AND s.source = 'live' AND s.ctrader_position_id IS NOT NULL
+       AND b.type = ? AND (b.account_id = ? OR (b.account_id IS NULL AND ? IS NULL))
+     LIMIT 1`
+  ).bind(pair, botType, accountId, accountId).first();
+  return row !== null;
+}
+
 export async function recordBotSignalOutcome(
   db: D1Database,
   id: string,

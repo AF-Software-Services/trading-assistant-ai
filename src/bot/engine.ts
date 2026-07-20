@@ -7,7 +7,8 @@ import { detectTrendlineSignal, pickTrendlineTunables, getTradingSession } from 
 import type { TradingSession }             from "../engines/trendline.ts";
 import { detectStructureSignal, pickStructureTunables } from "../engines/structure-signal.ts";
 import { detectFibonacciSignal, pickFibonacciTunables } from "../engines/fibonacci-signal.ts";
-import { DxyFilter } from "../engines/dxy-filter.ts";
+import { DxyFilter, estimateNotionalGBP } from "../engines/dxy-filter.ts";
+import type { DxyFilterConfig, OpenPositionForExposure } from "../engines/dxy-filter.ts";
 import { storeTrendlineTrailState }        from "./monitor.ts";
 import { TradingService }                  from "../trading/service.ts";
 import { getAccount, updateAccountBalance, getPrimaryAccountBalance } from "../ctrader/account-types.ts";
@@ -19,6 +20,7 @@ import {
   getBotSignals,
   updateBotSignalStatus,
   hasRecentLossOnLine,
+  hasOpenPositionFromBotType,
 } from "./signal-store.ts";
 
 const LINE_BLACKLIST_MS = 24 * 60 * 60 * 1000;
@@ -160,8 +162,10 @@ export async function runBotScan(env: {
     return result;
   }
 
-  const riskSettings = await env.KV.get("user:risk_settings", "json") as
-    { riskPercent?: number; rewardRisk?: number } | null;
+  const [riskSettings, dxySettings] = await Promise.all([
+    env.KV.get("user:risk_settings", "json") as Promise<{ riskPercent?: number; rewardRisk?: number } | null>,
+    env.KV.get("user:dxy_filter_settings", "json") as Promise<Partial<DxyFilterConfig> | null>,
+  ]);
   // Bot-level sizing overrides global risk settings; fall back to global if not yet saved on the bot.
   const riskPercent = env.botInstance
     ? (env.botInstance.settings["riskPercent"] as number | undefined) ?? (riskSettings?.riskPercent ?? 1)
@@ -192,6 +196,10 @@ export async function runBotScan(env: {
     : await TradingService.tryConnect(env);
   let openPositionPairs: Set<string> = new Set();
   let openCount = 0;
+  // Feeds DxyFilter.onPositionsChanged() for the exposure cap — scoped to this account only,
+  // same as everything else here (cross-account aggregation is a known, documented gap, not
+  // solved by this filter; see dxy-filter.ts).
+  let openPositionsForExposure: OpenPositionForExposure[] = [];
 
   // Size trades off the account's real balance, not a manually-typed guess.
   // Fetched fresh each scan (we already pay the TCP round-trip for the positions check below);
@@ -203,6 +211,9 @@ export async function runBotScan(env: {
       const positions = await trading.getPositions();
       openCount = positions.length;
       openPositionPairs = new Set(positions.map(p => p.symbol));
+      openPositionsForExposure = positions.map(p => ({
+        pair: p.symbol, direction: p.direction, lots: p.lots, price: p.currentPrice ?? p.openPrice,
+      }));
     } catch (e) {
       if (mode === "autonomous") {
         result.errors.push(`cTrader unavailable: ${(e as Error).message}`);
@@ -248,10 +259,14 @@ export async function runBotScan(env: {
 
   const targetPairs = targetPairsOverride ?? (PHASE1_PAIRS as CurrencyPair[]);
 
-  // Disabled by default (see DxyFilter's own config) — a centrally-configured shared
-  // instance is wired in once the filter has its own on/off UI; until then this proves the
-  // call site works without changing any bot's live behavior.
-  const dxyFilter = new DxyFilter();
+  // Master toggle defaults to { enabled: false } (DEFAULT_DXY_FILTER_CONFIG) until the user
+  // explicitly saves settings via PUT /api/v1/settings/dxy-filter — an existing bot's behavior
+  // is provably unchanged until then, regardless of its own per-bot useDxyFilter setting.
+  const dxyFilter = new DxyFilter(dxySettings ?? {});
+  if (dxyFilter.isEnabled()) {
+    await dxyFilter.refreshRegime(provider);
+    dxyFilter.onPositionsChanged(openPositionsForExposure);
+  }
 
   for (const pair of targetPairs) {
     result.pairsScanned++;
@@ -320,10 +335,22 @@ export async function runBotScan(env: {
         const lineBlacklisted = await hasRecentLossOnLine(env.DB, pair, lineType, lineP1Ts, lineP2Ts, Date.now() - LINE_BLACKLIST_MS);
         if (lineBlacklisted) continue;
 
+        // DXY direction veto — inert unless both this bot's useDxyFilter and the filter's
+        // own separate master toggle are on (both default off).
+        if (env.botInstance?.settings["useDxyFilter"] === true) {
+          const dxyGate = dxyFilter.isTradeAllowed(pair, tlSig.direction, botId);
+          if (!dxyGate.allowed) continue;
+        }
+
         result.signalsFound++;
 
         const lots = calcLots(riskAmount, pair, tlSig.entryPrice, tlSig.stopLoss);
         if (lots <= 0) continue;
+
+        if (env.botInstance?.settings["useDxyFilter"] === true) {
+          const notionalGBP = estimateNotionalGBP(pair, lots, tlSig.entryPrice);
+          if (dxyFilter.wouldBreachExposure(pair, tlSig.direction, notionalGBP)) continue;
+        }
 
         const signal: BotSignal = {
           id:               crypto.randomUUID(),
@@ -493,11 +520,16 @@ export async function runBotScan(env: {
         const confirmedHourUtc = new Date(fibSig.confirmedAt).getUTCHours();
         if (!allowedSessions[getTradingSession(confirmedHourUtc)]) continue;
 
-        // DXY direction veto — inert by default (DxyFilter's own master toggle defaults off
-        // regardless of this bot's useDxyFilter setting; a shared, centrally-configured
-        // instance with real settings is wired in separately once the DXY filter has its
-        // own on/off UI). No-op today: proves the call site is correct without changing
-        // any live bot's behavior.
+        // Cross-bot deconfliction — skip if a trendline-bot position is already open on this
+        // pair/account, unless this fibonacci bot explicitly opts into concurrency. Separate
+        // from allowDuplicatePairs, which only governs duplicates within this same bot.
+        if (env.botInstance?.settings["allowConcurrentWithTrendlineBot"] !== true) {
+          const trendlineOpen = await hasOpenPositionFromBotType(env.DB, pair, "trendline", env.botInstance?.accountId ?? null);
+          if (trendlineOpen) continue;
+        }
+
+        // DXY direction veto — inert unless both this bot's useDxyFilter and the filter's
+        // own separate master toggle are on (both default off).
         if (env.botInstance?.settings["useDxyFilter"] === true) {
           const dxyGate = dxyFilter.isTradeAllowed(pair, fibSig.direction, botId);
           if (!dxyGate.allowed) continue;
@@ -507,6 +539,11 @@ export async function runBotScan(env: {
 
         const lots = calcLots(riskAmount, pair, fibSig.entryPrice, fibSig.stopLoss);
         if (lots <= 0) continue;
+
+        if (env.botInstance?.settings["useDxyFilter"] === true) {
+          const notionalGBP = estimateNotionalGBP(pair, lots, fibSig.entryPrice);
+          if (dxyFilter.wouldBreachExposure(pair, fibSig.direction, notionalGBP)) continue;
+        }
 
         const signal: BotSignal = {
           id:               crypto.randomUUID(),

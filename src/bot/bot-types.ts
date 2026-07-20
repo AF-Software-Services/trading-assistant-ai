@@ -48,6 +48,9 @@ export const BOT_TYPE_REGISTRY: BotTypeDefinition[] = [
       // star) in the break direction, not just a close on the right side of the line.
       // Off by default — matches previous behavior, which never checked this.
       requireCandleConfirmation: false,
+      // Off by default — see the Fibonacci bot's identical setting and dxy-filter.ts. Inert
+      // regardless unless the DXY filter's own separate master toggle is also enabled.
+      useDxyFilter: false,
     },
   },
   {
@@ -92,9 +95,10 @@ export const BOT_TYPE_REGISTRY: BotTypeDefinition[] = [
       stopMode:             "beyond_invalidation",
       stopBufferATR:        0.5,
       takeProfitMode:       "prior_swing",
-      // Bot-level "use the filter" switch — inert unless the DXY filter's own separate
-      // master toggle (off by default) is also enabled. See src/engines/dxy-filter.ts.
-      useDxyFilter:        true,
+      // Bot-level "use the filter" switch — off by default per explicit instruction, and
+      // inert either way unless the DXY filter's own separate master toggle (also off by
+      // default) is enabled too. See src/engines/dxy-filter.ts.
+      useDxyFilter:        false,
       allowConcurrentWithTrendlineBot: false,
       maxOpenPositions:    2,
       allowDuplicatePairs: false,

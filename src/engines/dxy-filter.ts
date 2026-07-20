@@ -186,6 +186,11 @@ export class DxyFilter {
     return this.regime;
   }
 
+  /** The master toggle — callers use this to skip refreshRegime()/onPositionsChanged() entirely when off. */
+  isEnabled(): boolean {
+    return this.config.enabled;
+  }
+
   private isEnabledFor(instrument: string): boolean {
     if (!this.config.enabled) return false;
     return this.config.perInstrument?.[instrument] ?? true;
