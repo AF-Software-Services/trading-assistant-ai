@@ -2905,12 +2905,6 @@ function resolveBacktestPairs(bot: any): string[] {
   return (bot?.pairs?.length ?? 0) > 0 ? bot.pairs : PAIR_CATEGORIES.Forex
 }
 
-function updateBacktestPairsSummary(bot: any): void {
-  const el = document.getElementById('bt-pairs-summary')
-  if (!el || !bot) return
-  el.textContent = `Pairs (from bot): ${resolveBacktestPairs(bot).join(', ')}`
-}
-
 async function initBacktestTab(): Promise<void> {
   // Pre-fill dates: last 12 months
   const now = new Date()
@@ -2976,7 +2970,6 @@ async function loadBacktestBotSelector(): Promise<void> {
   if (selected) { selected.textContent = optionsEl.querySelector('.active')?.textContent?.trim() ?? first.name; selected.dataset.value = first.id }
   btBotId.value   = first.id
   btBotType.value = first.type
-  updateBacktestPairsSummary(first)
 
   // Wire dropdown
   selected?.addEventListener('click', () => optionsEl.classList.toggle('hidden'))
@@ -2989,7 +2982,6 @@ async function loadBacktestBotSelector(): Promise<void> {
       optionsEl.querySelectorAll('.custom-select-option').forEach(o => o.classList.remove('active'))
       el.classList.add('active')
       optionsEl.classList.add('hidden')
-      updateBacktestPairsSummary(backtestBotsCache[btBotId.value])
     })
   })
   document.addEventListener('click', e => {
@@ -3012,7 +3004,6 @@ function selectBacktestBot(botId: string): void {
   if (selected) { selected.textContent = opt.textContent?.trim() ?? ''; selected.dataset.value = botId }
   btSelect.querySelectorAll('.custom-select-option').forEach(o => o.classList.remove('active'))
   opt.classList.add('active')
-  updateBacktestPairsSummary(backtestBotsCache[botId])
 }
 
 let currentRunId: string | null = null
