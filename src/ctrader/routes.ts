@@ -20,6 +20,7 @@ import { createMarketDataProvider } from '../providers/factory.ts';
 import type { CurrencyPair } from '../types/market.ts';
 import { getBotSignals } from '../bot/signal-store.ts';
 import { listBots } from '../bot/bot-types.ts';
+import { PIP_SIZE, PIP_VALUE_GBP } from '../engines/pip-value.ts';
 
 interface Env {
   DB:                    D1Database;
@@ -514,10 +515,6 @@ async function attachUnrealizedPnl(env: Env, positions: Position[], svc: Trading
   if (positions.length === 0) return positions;
 
   const pairs = new Set(positions.map(p => p.symbol));
-  // Conversion anchors, only fetched if a position actually needs them.
-  if (positions.some(p => quoteCurrency(p.symbol) === 'USD')) pairs.add('GBP/USD');
-  if (positions.some(p => quoteCurrency(p.symbol) === 'CAD')) pairs.add('GBP/CAD');
-  if (positions.some(p => quoteCurrency(p.symbol) === 'JPY')) { pairs.add('GBP/USD'); pairs.add('USD/JPY'); }
 
   const provider = createMarketDataProvider({
     provider: env.MARKET_DATA_PROVIDER ?? 'ctrader',
@@ -533,41 +530,28 @@ async function attachUnrealizedPnl(env: Env, positions: Position[], svc: Trading
     } catch { /* leave unpriced — profit stays unset for affected positions below */ }
   }));
 
-  // GBP/USD price = USD per 1 GBP; GBP/CAD price = CAD per 1 GBP. Dividing a quote-currency
-  // amount by these gives GBP directly.
-  const usdPerGbp = prices.get('GBP/USD');
-  const cadPerGbp = prices.get('GBP/CAD');
-  const usdPerJpy = prices.get('USD/JPY');
-
   return positions.map(p => {
     const mark = prices.get(p.symbol);
     if (mark === undefined) return p;
 
     const dir = p.direction === 'buy' ? 1 : -1;
-    // p.volume is the broker's raw internal scaling (this broker: 1 lot = 10,000,000 raw
-    // units) — not base-currency units. p.lots is already normalised via the real per-symbol
-    // lotSize, so derive notional from that (1 standard lot = 100,000 units of base currency)
-    // rather than assuming a fixed raw-volume divisor.
-    const notional = p.lots * 100_000;
-    const profitInQuote = (mark - p.openPrice) * notional * dir;
-
-    const quote = quoteCurrency(p.symbol);
-    let quotePerGbp: number | undefined;
-    if (quote === 'GBP') quotePerGbp = 1;
-    else if (quote === 'USD') quotePerGbp = usdPerGbp;
-    else if (quote === 'CAD') quotePerGbp = cadPerGbp;
-    else if (quote === 'JPY' && usdPerGbp !== undefined && usdPerJpy !== undefined) quotePerGbp = usdPerGbp * usdPerJpy;
+    // Per-instrument pip size/value, not a hardcoded forex-lot assumption — a "lot" means a
+    // wildly different real contract size per instrument (100,000 units for forex, but 100oz
+    // for gold, 5000oz for silver, etc.), which the previous `lots * 100_000` here ignored,
+    // producing a ~1000x-inflated unrealized P&L for gold (and the same class of error for
+    // every other non-forex instrument). PIP_VALUE_GBP is already expressed in GBP per pip
+    // per lot (confirmed against real Pepperstone contract specs), so no separate currency
+    // conversion step is needed here — same source of truth already used everywhere else in
+    // the app for P&L (see backtest/runner.ts, engines/dxy-filter.ts).
+    const pips   = (mark - p.openPrice) / (PIP_SIZE[p.symbol as CurrencyPair] ?? 0.0001) * dir;
+    const profit = pips * (PIP_VALUE_GBP[p.symbol] ?? 7.50) * p.lots;
 
     return {
       ...p,
       currentPrice: mark,
-      ...(quotePerGbp !== undefined ? { profit: Number((profitInQuote / quotePerGbp).toFixed(2)) } : {}),
+      profit: Number(profit.toFixed(2)),
     };
   });
-}
-
-function quoteCurrency(pair: string): string {
-  return pair.split('/')[1] ?? '';
 }
 
 async function refreshAccountBalance(env: Env, accountId: string) {
