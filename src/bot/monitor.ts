@@ -171,6 +171,19 @@ async function monitorAccountSignals(
             }
           }
           if (cancelled) {
+            // cTrader can report a cancel as successful even when the order filled just
+            // before, or concurrently with, the cancel request reaching the broker — a
+            // "cancelled" response here doesn't guarantee nothing filled. Re-check live
+            // positions right now before trusting it: if this position id is actually open,
+            // the cancel lost the race, not the order — leave it as "executed" so the normal
+            // position-closed handling above tracks it on a later tick, instead of marking a
+            // real open position "expired" and permanently dropping it from monitoring.
+            const freshPositions = await trading.getPositions();
+            if (freshPositions.some(p => p.positionId === posId)) {
+              console.log(`[Monitor] ${signal.pair} ${signal.direction}: cancel raced a fill — position ${posId} is actually open, leaving as executed`);
+              continue;
+            }
+
             if (signal.journalId) {
               await deleteJournalEntry(env.DB, signal.journalId);
               await clearBotSignalJournalId(env.DB, signal.id);
