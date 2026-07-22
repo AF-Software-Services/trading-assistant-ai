@@ -1,4 +1,4 @@
-import { PHASE1_PAIRS } from "../types/market.ts";
+import { ALL_TRADEABLE_PAIRS } from "../types/market.ts";
 import { runBotScan }   from "../bot/engine.ts";
 import { listBots, seedBotsFromLegacyKV } from "../bot/bot-types.ts";
 import { monitorPositions } from "../bot/monitor.ts";
@@ -110,7 +110,7 @@ export async function handleCronTrigger(
         const scanRun: ScanRun = {
           id:                       generateUUID(),
           sessionName,
-          pairsScanned:             PHASE1_PAIRS,
+          pairsScanned:             ALL_TRADEABLE_PAIRS,
           recommendationsGenerated: 0,
           createdAt:                start,
           durationMs,

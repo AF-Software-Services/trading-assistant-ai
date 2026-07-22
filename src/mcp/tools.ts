@@ -497,7 +497,7 @@ export function registerTools(server: McpServer, env: Env): void {
         `  Min confidence score : ${updated.settings.minConfidenceScore ?? "—"}\n` +
         `  Max open positions   : ${updated.settings.maxOpenPositions ?? "—"}\n` +
         `  Account              : ${updated.accountId ?? "none assigned"}\n` +
-        `  Active pairs         : ${updated.pairs.length > 0 ? updated.pairs.join(", ") : "All 6 pairs"}\n\n` +
+        `  Active pairs         : ${updated.pairs.length > 0 ? updated.pairs.join(", ") : "NONE — this bot will not scan anything"}\n\n` +
         (warnings.length > 0 ? warnings.join("\n") : "Bot is ready.")
       );
     }
@@ -518,7 +518,7 @@ export function registerTools(server: McpServer, env: Env): void {
 
       const botLines = bots.map(b =>
         `  ${b.name} [${b.type}] — ${b.id}\n` +
-        `    Mode: ${b.mode.toUpperCase()} | Account: ${b.accountId ?? "none assigned"} | Pairs: ${b.pairs.length > 0 ? b.pairs.join(", ") : "all 6"}\n` +
+        `    Mode: ${b.mode.toUpperCase()} | Account: ${b.accountId ?? "none assigned"} | Pairs: ${b.pairs.length > 0 ? b.pairs.join(", ") : "NONE — will not scan anything"}\n` +
         `    Min confidence: ${b.settings.minConfidenceScore ?? "—"} | Max open positions: ${b.settings.maxOpenPositions ?? "—"}`
       ).join("\n\n");
 
