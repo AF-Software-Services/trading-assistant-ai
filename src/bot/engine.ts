@@ -1,6 +1,7 @@
-import type { CurrencyPair }               from "../types/market.ts";
+import type { CurrencyPair, Timeframe, Candle, PriceTick } from "../types/market.ts";
 import type { BotInstance }                from "./bot-types.ts";
 import { createMarketDataProvider }        from "../providers/factory.ts";
+import type { MarketDataProvider }         from "../providers/interface.ts";
 import { pipFactor, PIP_VALUE_GBP }        from "../engines/pip-value.ts";
 import { detectTrendlineSignal, pickTrendlineTunables, getTradingSession } from "../engines/trendline.ts";
 import type { TradingSession }             from "../engines/trendline.ts";
@@ -41,6 +42,15 @@ export interface BotRunResult {
   errors:          string[];
   warnings?:       string[];
 }
+
+type Env = {
+  DB: D1Database;
+  KV: KVNamespace;
+  MARKET_DATA_PROVIDER: string;
+  CTRADER_CLIENT_ID: string;
+  CTRADER_CLIENT_SECRET: string;
+  CTRADER_ACCOUNT_ID: string;
+};
 
 export function calcLots(riskAmountGBP: number, pair: string, entryPrice: number, stopLoss: number): number {
   const stopPips = Math.abs(entryPrice - stopLoss) * pipFactor(pair);
@@ -109,17 +119,65 @@ export async function executeSignal(
   });
 }
 
-// ── Main bot scan ─────────────────────────────────────────────────────────────
+// ── Shared candle cache ────────────────────────────────────────────────────────
+// Multiple active bots very often target the same pair — sometimes the exact same bot type
+// with the exact same timeframe/count (e.g. two trendline bots covering the same 19 pairs).
+// Candle history isn't account-specific, so whichever bot's connection fetches a given
+// (pair, timeframe, count) combination first can serve every other bot that needs the same
+// data this scan, instead of each bot independently refetching it. Scoped to a single
+// runBotScans() call — never persisted, so every scan tick still sees fully fresh data.
+class ScanCandleCache implements MarketDataProvider {
+  private cache = new Map<string, Promise<Candle[]>>();
+  constructor(private provider: MarketDataProvider) {}
 
-export async function runBotScan(env: {
-  DB: D1Database;
-  KV: KVNamespace;
-  MARKET_DATA_PROVIDER: string;
-  CTRADER_CLIENT_ID: string;
-  CTRADER_CLIENT_SECRET: string;
-  CTRADER_ACCOUNT_ID: string;
-  botInstance?: BotInstance;
-}): Promise<BotRunResult> {
+  getCandles(pair: CurrencyPair, timeframe: Timeframe, count: number): Promise<Candle[]> {
+    const key = `${pair}:${timeframe}:${count}`;
+    let entry = this.cache.get(key);
+    if (!entry) {
+      entry = this.provider.getCandles(pair, timeframe, count);
+      this.cache.set(key, entry);
+    }
+    return entry;
+  }
+
+  getLatestPrice(pair: CurrencyPair): Promise<PriceTick> {
+    return this.provider.getLatestPrice(pair);
+  }
+}
+
+// ── Per-bot scan context ──────────────────────────────────────────────────────
+// Everything about a bot that's independent of which pair is being evaluated — account
+// connection, sizing, tuning, open-position state — resolved once per bot per scan run,
+// then reused across every pair that bot targets.
+interface BotContext {
+  botInstance:         BotInstance | undefined;
+  botId:               string;
+  botType:             string;
+  mode:                "off" | "approval" | "autonomous";
+  minConfidenceScore:  number;
+  minConfluence:       number;
+  maxOpenPositions:    number;
+  allowDuplicatePairs: boolean;
+  targetPairs:         CurrencyPair[];
+  riskAmount:          number;
+  rrRatio:             number;
+  tunables:            ReturnType<typeof pickTrendlineTunables>;
+  swingLookback:       number;
+  tpMode:              "rr" | "atLevel";
+  requireCandleConfirmation: boolean;
+  structureTunables:   ReturnType<typeof pickStructureTunables>;
+  allowedSessions:     Record<TradingSession, boolean>;
+  trading:             TradingService | null;
+  openPositionPairs:   Set<string>;
+  openCount:           number;
+  dxyFilter:           DxyFilter;
+  result:              BotRunResult;
+}
+
+async function buildBotContext(
+  env: Env,
+  botInstance: BotInstance | undefined,
+): Promise<{ ctx: BotContext } | { doneResult: BotRunResult }> {
   const result: BotRunResult = {
     pairsScanned: 0, signalsFound: 0,
     signalsQueued: 0, signalsExecuted: 0, signalsFailed: 0, errors: [],
@@ -137,31 +195,31 @@ export async function runBotScan(env: {
   // means a bot's actual coverage can silently diverge from what its own settings say.
   let targetPairs: CurrencyPair[];
 
-  if (env.botInstance) {
-    const bot = env.botInstance;
-    mode               = bot.mode;
+  if (botInstance) {
+    const bot = botInstance;
+    mode                = bot.mode;
     minConfidenceScore  = bot.settings.minConfidenceScore  as number;
     minConfluence       = bot.settings.minConfluence       as number;
     maxOpenPositions    = bot.settings.maxOpenPositions    as number;
     allowDuplicatePairs = bot.settings.allowDuplicatePairs as boolean;
     botId               = bot.id;
-    botType            = bot.type;
+    botType             = bot.type;
     targetPairs         = bot.pairs;
   } else {
     const settings = await getBotSettings(env.KV);
-    mode               = settings.mode;
+    mode                = settings.mode;
     minConfidenceScore  = settings.minConfidenceScore;
     minConfluence       = settings.minConfluence;
     maxOpenPositions    = settings.maxOpenPositions;
     allowDuplicatePairs = settings.allowDuplicatePairs;
     botId               = "legacy";
-    botType            = "trendline";
+    botType             = "trendline";
     targetPairs         = settings.pairs as CurrencyPair[];
   }
 
   if (mode === "off") {
     result.errors.push("Bot is OFF");
-    return result;
+    return { doneResult: result };
   }
 
   const [riskSettings, dxySettings] = await Promise.all([
@@ -169,29 +227,29 @@ export async function runBotScan(env: {
     env.KV.get("user:dxy_filter_settings", "json") as Promise<Partial<DxyFilterConfig> | null>,
   ]);
   // Bot-level sizing overrides global risk settings; fall back to global if not yet saved on the bot.
-  const riskPercent = env.botInstance
-    ? (env.botInstance.settings["riskPercent"] as number | undefined) ?? (riskSettings?.riskPercent ?? 1)
+  const riskPercent = botInstance
+    ? (botInstance.settings["riskPercent"] as number | undefined) ?? (riskSettings?.riskPercent ?? 1)
     : riskSettings?.riskPercent ?? 1;
-  const rrRatio = env.botInstance
-    ? (env.botInstance.settings["rewardRisk"] as number | undefined) ?? (riskSettings?.rewardRisk ?? 1.5)
+  const rrRatio = botInstance
+    ? (botInstance.settings["rewardRisk"] as number | undefined) ?? (riskSettings?.rewardRisk ?? 1.5)
     : riskSettings?.rewardRisk ?? 1.5;
 
   // Trade-setup tuning — only meaningful per-bot; the legacy (no botInstance) path always
   // ran on the hardcoded defaults, so it keeps doing that here.
-  const tunables = env.botInstance ? pickTrendlineTunables(env.botInstance.settings) : {};
-  const swingLookback = (env.botInstance?.settings["swingLookback"] as number | undefined) ?? 5;
-  const tpMode = ((env.botInstance?.settings["tpMode"] as string | undefined) === "atLevel" ? "atLevel" : "rr") as "rr" | "atLevel";
-  const requireCandleConfirmation = env.botInstance?.settings["requireCandleConfirmation"] === true;
-  const structureTunables = env.botInstance ? pickStructureTunables(env.botInstance.settings) : {};
+  const tunables = botInstance ? pickTrendlineTunables(botInstance.settings) : {};
+  const swingLookback = (botInstance?.settings["swingLookback"] as number | undefined) ?? 5;
+  const tpMode = ((botInstance?.settings["tpMode"] as string | undefined) === "atLevel" ? "atLevel" : "rr") as "rr" | "atLevel";
+  const requireCandleConfirmation = botInstance?.settings["requireCandleConfirmation"] === true;
+  const structureTunables = botInstance ? pickStructureTunables(botInstance.settings) : {};
   const allowedSessions: Record<TradingSession, boolean> = {
-    asian:  env.botInstance?.settings["allowAsianSession"]  !== false,
-    london: env.botInstance?.settings["allowLondonSession"] !== false,
-    ny:     env.botInstance?.settings["allowNySession"]     !== false,
+    asian:  botInstance?.settings["allowAsianSession"]  !== false,
+    london: botInstance?.settings["allowLondonSession"] !== false,
+    ny:     botInstance?.settings["allowNySession"]     !== false,
   };
 
   // Connect to the bot's assigned account; fall back to legacy global token
-  const botAccount = env.botInstance?.accountId
-    ? await getAccount(env.DB, env.botInstance.accountId)
+  const botAccount = botInstance?.accountId
+    ? await getAccount(env.DB, botInstance.accountId)
     : null;
   const trading = botAccount
     ? await TradingService.tryConnectToAccount(env, botAccount)
@@ -219,7 +277,7 @@ export async function runBotScan(env: {
     } catch (e) {
       if (mode === "autonomous") {
         result.errors.push(`cTrader unavailable: ${(e as Error).message}`);
-        return result;
+        return { doneResult: result };
       }
       result.warnings = result.warnings ?? [];
       result.warnings.push(`cTrader position check skipped: ${(e as Error).message}`);
@@ -232,12 +290,12 @@ export async function runBotScan(env: {
     } catch { /* keep cached/fallback accountBalance */ }
   } else if (mode === "autonomous") {
     result.errors.push("cTrader not connected — cannot execute autonomously");
-    return result;
+    return { doneResult: result };
   } else {
     // Candle data itself now comes from cTrader too, so scanning is impossible without a
     // connection even in approval mode (previously an independent data vendor made this work).
     result.errors.push("cTrader not connected — cannot fetch candle data to scan");
-    return result;
+    return { doneResult: result };
   }
 
   const riskAmount = accountBalance * riskPercent / 100;
@@ -254,369 +312,448 @@ export async function runBotScan(env: {
      WHERE status = 'pending' AND expires_at < ?`
   ).bind(Date.now()).run();
 
-  const provider = createMarketDataProvider({
-    provider: env.MARKET_DATA_PROVIDER,
-    trading,
-  });
-
   // Master toggle defaults to { enabled: false } (DEFAULT_DXY_FILTER_CONFIG) until the user
   // explicitly saves settings via PUT /api/v1/settings/dxy-filter — an existing bot's behavior
   // is provably unchanged until then, regardless of its own per-bot useDxyFilter setting.
   const dxyFilter = new DxyFilter(dxySettings ?? {});
   if (dxyFilter.isEnabled()) {
-    await dxyFilter.refreshRegime(provider);
     dxyFilter.onPositionsChanged(openPositionsForExposure);
   }
 
-  for (const pair of targetPairs) {
-    result.pairsScanned++;
+  return {
+    ctx: {
+      botInstance, botId, botType, mode,
+      minConfidenceScore, minConfluence, maxOpenPositions, allowDuplicatePairs,
+      targetPairs, riskAmount, rrRatio, tunables, swingLookback, tpMode,
+      requireCandleConfirmation, structureTunables, allowedSessions,
+      trading, openPositionPairs, openCount, dxyFilter, result,
+    },
+  };
+}
 
-    try {
-      if (!allowDuplicatePairs && openPositionPairs.has(pair)) continue;
-      if (openCount >= maxOpenPositions) break;
+// ── Per-(bot, pair) signal detection + execution ──────────────────────────────
+// Everything that used to be inside runBotScan's per-pair loop body, now parameterized over
+// a pre-built BotContext and a shared candle cache instead of a bot-owned provider.
+async function scanPairForBot(
+  env:   Env,
+  ctx:   BotContext,
+  pair:  CurrencyPair,
+  cache: ScanCandleCache,
+): Promise<void> {
+  const { botId, botType, mode, result } = ctx;
 
-      const lastExecuted = await env.KV.get(`bot:last_executed:${botId}:${pair}`);
-      if (lastExecuted && Date.now() - parseInt(lastExecuted) < 4 * 60 * 60 * 1000) continue;
+  if (botType === "trendline") {
+    const [candles4H, candlesD] = await Promise.all([
+      cache.getCandles(pair, "4H", 200),
+      cache.getCandles(pair, "D", 30),
+    ]);
+    const tlSig = detectTrendlineSignal(candles4H, ctx.rrRatio, ctx.swingLookback, candlesD, ctx.tunables, ctx.tpMode, ctx.requireCandleConfirmation);
 
-      if (botType === "trendline") {
-        const [candles4H, candlesD] = await Promise.all([
-          provider.getCandles(pair, "4H", 200),
-          provider.getCandles(pair, "D", 30),
-        ]);
-        const tlSig = detectTrendlineSignal(candles4H, rrRatio, swingLookback, candlesD, tunables, tpMode, requireCandleConfirmation);
-
-        if (!tlSig) {
-          const tlNoBias = detectTrendlineSignal(candles4H, rrRatio, swingLookback, undefined, tunables, tpMode, requireCandleConfirmation);
-          if (tlNoBias) {
-            await saveBotSignal(env.DB, {
-              id: crypto.randomUUID(), botId, pair,
-              direction:         tlNoBias.direction,
-              entryPrice:        tlNoBias.entryPrice,
-              stopLoss:          tlNoBias.stopLoss,
-              takeProfit:        tlNoBias.takeProfit,
-              lots:              0,
-              score:             tlNoBias.score,
-              recommendationId:  null,
-              reasons:           tlNoBias.reasons,
-              status:            "rejected",
-              createdAt:         Date.now(),
-              expiresAt:         Date.now() + 4 * 60 * 60 * 1000,
-              executedAt:        null,
-              ctraderPositionId: null,
-              journalId:         null,
-              rejectionReason:   "daily_bias_filter",
-              errorMessage:      null,
-              source:            "live",
-              backtestRunId:     null,
-              signalType:        "trendline_break_retest",
-              signalTimeframe:   "4H",
-              signalConfidence:  tlNoBias.score,
-              trend:             tlNoBias.direction === "buy" ? "bullish" : "bearish",
-              structure:         null, mtfBias: null, mtfLabel: null,
-              atr:               null, inAoi: false, fibLabel: null,
-              tradeClass:        "trendline", zoneType: null, patternType: null,
-              outcome: null, closePrice: null, closeTime: null, pnlPips: null, pnlGbp: null,
-              lineType: tlNoBias.actionLine.type,
-              lineP1Ts: candles4H[tlNoBias.actionLine.p1Index]!.timestamp,
-              lineP2Ts: candles4H[tlNoBias.actionLine.p2Index]!.timestamp,
-              zoneLow: null, zoneHigh: null,
-            });
-          }
-          continue;
-        }
-        if (tlSig.score < minConfidenceScore) continue;
-
-        const retestHourUtc = new Date(candles4H[tlSig.retestIndex]!.timestamp).getUTCHours();
-        if (!allowedSessions[getTradingSession(retestHourUtc)]) continue;
-
-        const lineType = tlSig.actionLine.type;
-        const lineP1Ts = candles4H[tlSig.actionLine.p1Index]!.timestamp;
-        const lineP2Ts = candles4H[tlSig.actionLine.p2Index]!.timestamp;
-        const lineBlacklisted = await hasRecentLossOnLine(env.DB, pair, lineType, lineP1Ts, lineP2Ts, Date.now() - LINE_BLACKLIST_MS);
-        if (lineBlacklisted) continue;
-
-        // DXY direction veto — inert unless both this bot's useDxyFilter and the filter's
-        // own separate master toggle are on (both default off).
-        if (env.botInstance?.settings["useDxyFilter"] === true) {
-          const dxyGate = dxyFilter.isTradeAllowed(pair, tlSig.direction, botId);
-          if (!dxyGate.allowed) continue;
-        }
-
-        result.signalsFound++;
-
-        const lots = calcLots(riskAmount, pair, tlSig.entryPrice, tlSig.stopLoss);
-        if (lots <= 0) continue;
-
-        if (env.botInstance?.settings["useDxyFilter"] === true) {
-          const notionalGBP = estimateNotionalGBP(pair, lots, tlSig.entryPrice);
-          if (dxyFilter.wouldBreachExposure(pair, tlSig.direction, notionalGBP)) continue;
-        }
-
-        const signal: BotSignal = {
-          id:               crypto.randomUUID(),
-          botId,
-          pair,
-          direction:        tlSig.direction,
-          entryPrice:       tlSig.entryPrice,
-          stopLoss:         tlSig.stopLoss,
-          takeProfit:       tlSig.takeProfit,
-          lots,
-          score:            tlSig.score,
-          recommendationId: null,
-          reasons:          tlSig.reasons,
-          status:           "pending",
-          createdAt:        Date.now(),
-          expiresAt:        Date.now() + 4 * 60 * 60 * 1000,
-          executedAt:       null,
+    if (!tlSig) {
+      const tlNoBias = detectTrendlineSignal(candles4H, ctx.rrRatio, ctx.swingLookback, undefined, ctx.tunables, ctx.tpMode, ctx.requireCandleConfirmation);
+      if (tlNoBias) {
+        await saveBotSignal(env.DB, {
+          id: crypto.randomUUID(), botId, pair,
+          direction:         tlNoBias.direction,
+          entryPrice:        tlNoBias.entryPrice,
+          stopLoss:          tlNoBias.stopLoss,
+          takeProfit:        tlNoBias.takeProfit,
+          lots:              0,
+          score:             tlNoBias.score,
+          recommendationId:  null,
+          reasons:           tlNoBias.reasons,
+          status:            "rejected",
+          createdAt:         Date.now(),
+          expiresAt:         Date.now() + 4 * 60 * 60 * 1000,
+          executedAt:        null,
           ctraderPositionId: null,
-          journalId:        null,
-          rejectionReason:  null,
-          errorMessage:     null,
-          source:           'live',
-          backtestRunId:    null,
-          signalType:       "trendline_break_retest",
-          signalTimeframe:  "4H",
-          signalConfidence: tlSig.score,
-          trend:            tlSig.direction === "buy" ? "bullish" : "bearish",
-          structure:        null,
-          mtfBias:          null,
-          mtfLabel:         null,
-          atr:              null,
-          inAoi:            false,
-          fibLabel:         null,
-          tradeClass:       "trendline",
-          zoneType:         null,
-          patternType:      null,
-          outcome:          null,
-          closePrice:       null,
-          closeTime:        null,
-          pnlPips:          null,
-          pnlGbp:           null,
-          lineType,
-          lineP1Ts,
-          lineP2Ts,
-          zoneLow: null,
-          zoneHigh: null,
-        };
-
-        if (mode === "approval") {
-          await saveBotSignal(env.DB, signal);
-          result.signalsQueued++;
-        } else {
-          try {
-            if (!trading) throw new Error("No cTrader token");
-            await saveBotSignal(env.DB, signal);
-            await executeSignal(signal, env.DB, env.KV, trading, "limit");
-            await storeTrendlineTrailState(env.KV, signal.id, tlSig.safetyLine, Date.now(), signal.stopLoss);
-            openCount++;
-            openPositionPairs.add(pair);
-            result.signalsExecuted++;
-          } catch (e) {
-            const msg = (e as Error).message;
-            await updateBotSignalStatus(env.DB, signal.id, "failed", { errorMessage: msg });
-            result.signalsFailed++;
-            result.errors.push(`${pair} ${tlSig.direction}: ${msg}`);
-          }
-        }
-
-        continue;
+          journalId:         null,
+          rejectionReason:   "daily_bias_filter",
+          errorMessage:      null,
+          source:            "live",
+          backtestRunId:     null,
+          signalType:        "trendline_break_retest",
+          signalTimeframe:   "4H",
+          signalConfidence:  tlNoBias.score,
+          trend:             tlNoBias.direction === "buy" ? "bullish" : "bearish",
+          structure:         null, mtfBias: null, mtfLabel: null,
+          atr:               null, inAoi: false, fibLabel: null,
+          tradeClass:        "trendline", zoneType: null, patternType: null,
+          outcome: null, closePrice: null, closeTime: null, pnlPips: null, pnlGbp: null,
+          lineType: tlNoBias.actionLine.type,
+          lineP1Ts: candles4H[tlNoBias.actionLine.p1Index]!.timestamp,
+          lineP2Ts: candles4H[tlNoBias.actionLine.p2Index]!.timestamp,
+          zoneLow: null, zoneHigh: null,
+        });
       }
+      return;
+    }
+    if (tlSig.score < ctx.minConfidenceScore) return;
 
-      if (botType === "structure") {
-        const [candlesW, candlesD, candles4H] = await Promise.all([
-          provider.getCandles(pair, "W", 60),
-          provider.getCandles(pair, "D", 90),
-          provider.getCandles(pair, "4H", 200),
-        ]);
-        const stSig = detectStructureSignal(candlesW, candlesD, candles4H, rrRatio, minConfluence, structureTunables, tpMode);
-        if (!stSig) continue;
-        if (stSig.score < minConfidenceScore) continue;
+    const retestHourUtc = new Date(candles4H[tlSig.retestIndex]!.timestamp).getUTCHours();
+    if (!ctx.allowedSessions[getTradingSession(retestHourUtc)]) return;
 
-        const confirmedHourUtc = new Date(stSig.confirmedAt).getUTCHours();
-        if (!allowedSessions[getTradingSession(confirmedHourUtc)]) continue;
+    const lineType = tlSig.actionLine.type;
+    const lineP1Ts = candles4H[tlSig.actionLine.p1Index]!.timestamp;
+    const lineP2Ts = candles4H[tlSig.actionLine.p2Index]!.timestamp;
+    const lineBlacklisted = await hasRecentLossOnLine(env.DB, pair, lineType, lineP1Ts, lineP2Ts, Date.now() - LINE_BLACKLIST_MS);
+    if (lineBlacklisted) return;
 
-        result.signalsFound++;
+    // DXY direction veto — inert unless both this bot's useDxyFilter and the filter's
+    // own separate master toggle are on (both default off).
+    if (ctx.botInstance?.settings["useDxyFilter"] === true) {
+      const dxyGate = ctx.dxyFilter.isTradeAllowed(pair, tlSig.direction, botId);
+      if (!dxyGate.allowed) return;
+    }
 
-        const lots = calcLots(riskAmount, pair, stSig.entryPrice, stSig.stopLoss);
-        if (lots <= 0) continue;
+    result.signalsFound++;
 
-        const signal: BotSignal = {
-          id:               crypto.randomUUID(),
-          botId,
-          pair,
-          direction:        stSig.direction,
-          entryPrice:       stSig.entryPrice,
-          stopLoss:         stSig.stopLoss,
-          takeProfit:       stSig.takeProfit,
-          lots,
-          score:            stSig.score,
-          recommendationId: null,
-          reasons:          stSig.reasons,
-          status:           "pending",
-          createdAt:        Date.now(),
-          expiresAt:        Date.now() + 4 * 60 * 60 * 1000,
-          executedAt:       null,
-          ctraderPositionId: null,
-          journalId:        null,
-          rejectionReason:  null,
-          errorMessage:     null,
-          source:           'live',
-          backtestRunId:    null,
-          signalType:       "structure_zone_bounce",
-          signalTimeframe:  "4H",
-          signalConfidence: stSig.score,
-          trend:            stSig.direction === "buy" ? "bullish" : "bearish",
-          structure:        null,
-          mtfBias:          null,
-          mtfLabel:         null,
-          atr:              null,
-          inAoi:            true,
-          fibLabel:         null,
-          tradeClass:       "structure",
-          zoneType:         stSig.zoneType,
-          patternType:      stSig.patternType,
-          outcome:          null,
-          closePrice:       null,
-          closeTime:        null,
-          pnlPips:          null,
-          pnlGbp:           null,
-          lineType:         null,
-          lineP1Ts:         null,
-          lineP2Ts:         null,
-          zoneLow:          stSig.zoneLow,
-          zoneHigh:         stSig.zoneHigh,
-        };
+    const lots = calcLots(ctx.riskAmount, pair, tlSig.entryPrice, tlSig.stopLoss);
+    if (lots <= 0) return;
 
-        if (mode === "approval") {
-          await saveBotSignal(env.DB, signal);
-          result.signalsQueued++;
-        } else {
-          try {
-            if (!trading) throw new Error("No cTrader token");
-            await saveBotSignal(env.DB, signal);
-            await executeSignal(signal, env.DB, env.KV, trading, "market");
-            openCount++;
-            openPositionPairs.add(pair);
-            result.signalsExecuted++;
-          } catch (e) {
-            const msg = (e as Error).message;
-            await updateBotSignalStatus(env.DB, signal.id, "failed", { errorMessage: msg });
-            result.signalsFailed++;
-            result.errors.push(`${pair} ${stSig.direction}: ${msg}`);
-          }
-        }
+    if (ctx.botInstance?.settings["useDxyFilter"] === true) {
+      const notionalGBP = estimateNotionalGBP(pair, lots, tlSig.entryPrice);
+      if (ctx.dxyFilter.wouldBreachExposure(pair, tlSig.direction, notionalGBP)) return;
+    }
 
-        continue;
+    const signal: BotSignal = {
+      id:               crypto.randomUUID(),
+      botId,
+      pair,
+      direction:        tlSig.direction,
+      entryPrice:       tlSig.entryPrice,
+      stopLoss:         tlSig.stopLoss,
+      takeProfit:       tlSig.takeProfit,
+      lots,
+      score:            tlSig.score,
+      recommendationId: null,
+      reasons:          tlSig.reasons,
+      status:           "pending",
+      createdAt:        Date.now(),
+      expiresAt:        Date.now() + 4 * 60 * 60 * 1000,
+      executedAt:       null,
+      ctraderPositionId: null,
+      journalId:        null,
+      rejectionReason:  null,
+      errorMessage:     null,
+      source:           'live',
+      backtestRunId:    null,
+      signalType:       "trendline_break_retest",
+      signalTimeframe:  "4H",
+      signalConfidence: tlSig.score,
+      trend:            tlSig.direction === "buy" ? "bullish" : "bearish",
+      structure:        null,
+      mtfBias:          null,
+      mtfLabel:         null,
+      atr:              null,
+      inAoi:            false,
+      fibLabel:         null,
+      tradeClass:       "trendline",
+      zoneType:         null,
+      patternType:      null,
+      outcome:          null,
+      closePrice:       null,
+      closeTime:        null,
+      pnlPips:          null,
+      pnlGbp:           null,
+      lineType,
+      lineP1Ts,
+      lineP2Ts,
+      zoneLow: null,
+      zoneHigh: null,
+    };
+
+    if (mode === "approval") {
+      await saveBotSignal(env.DB, signal);
+      result.signalsQueued++;
+    } else {
+      try {
+        if (!ctx.trading) throw new Error("No cTrader token");
+        await saveBotSignal(env.DB, signal);
+        await executeSignal(signal, env.DB, env.KV, ctx.trading, "limit");
+        await storeTrendlineTrailState(env.KV, signal.id, tlSig.safetyLine, Date.now(), signal.stopLoss);
+        ctx.openCount++;
+        ctx.openPositionPairs.add(pair);
+        result.signalsExecuted++;
+      } catch (e) {
+        const msg = (e as Error).message;
+        await updateBotSignalStatus(env.DB, signal.id, "failed", { errorMessage: msg });
+        result.signalsFailed++;
+        result.errors.push(`${pair} ${tlSig.direction}: ${msg}`);
       }
+    }
 
-      if (botType === "fibonacci") {
-        const candles4H = await provider.getCandles(pair, "4H", 200);
-        const minReward = (env.botInstance?.settings["minReward"] as number | undefined) ?? 1.5;
-        const fibTunables = env.botInstance ? pickFibonacciTunables(env.botInstance.settings) : {};
-        const fibSig = detectFibonacciSignal(candles4H, rrRatio, minReward, fibTunables);
-        if (!fibSig) continue;
-        if (fibSig.score < minConfidenceScore) continue;
+    return;
+  }
 
-        const confirmedHourUtc = new Date(fibSig.confirmedAt).getUTCHours();
-        if (!allowedSessions[getTradingSession(confirmedHourUtc)]) continue;
+  if (botType === "structure") {
+    const [candlesW, candlesD, candles4H] = await Promise.all([
+      cache.getCandles(pair, "W", 60),
+      cache.getCandles(pair, "D", 90),
+      cache.getCandles(pair, "4H", 200),
+    ]);
+    const stSig = detectStructureSignal(candlesW, candlesD, candles4H, ctx.rrRatio, ctx.minConfluence, ctx.structureTunables, ctx.tpMode);
+    if (!stSig) return;
+    if (stSig.score < ctx.minConfidenceScore) return;
 
-        // Cross-bot deconfliction — skip if a trendline-bot position is already open on this
-        // pair/account, unless this fibonacci bot explicitly opts into concurrency. Separate
-        // from allowDuplicatePairs, which only governs duplicates within this same bot.
-        if (env.botInstance?.settings["allowConcurrentWithTrendlineBot"] !== true) {
-          const trendlineOpen = await hasOpenPositionFromBotType(env.DB, pair, "trendline", env.botInstance?.accountId ?? null);
-          if (trendlineOpen) continue;
-        }
+    const confirmedHourUtc = new Date(stSig.confirmedAt).getUTCHours();
+    if (!ctx.allowedSessions[getTradingSession(confirmedHourUtc)]) return;
 
-        // DXY direction veto — inert unless both this bot's useDxyFilter and the filter's
-        // own separate master toggle are on (both default off).
-        if (env.botInstance?.settings["useDxyFilter"] === true) {
-          const dxyGate = dxyFilter.isTradeAllowed(pair, fibSig.direction, botId);
-          if (!dxyGate.allowed) continue;
-        }
+    result.signalsFound++;
 
-        result.signalsFound++;
+    const lots = calcLots(ctx.riskAmount, pair, stSig.entryPrice, stSig.stopLoss);
+    if (lots <= 0) return;
 
-        const lots = calcLots(riskAmount, pair, fibSig.entryPrice, fibSig.stopLoss);
-        if (lots <= 0) continue;
+    const signal: BotSignal = {
+      id:               crypto.randomUUID(),
+      botId,
+      pair,
+      direction:        stSig.direction,
+      entryPrice:       stSig.entryPrice,
+      stopLoss:         stSig.stopLoss,
+      takeProfit:       stSig.takeProfit,
+      lots,
+      score:            stSig.score,
+      recommendationId: null,
+      reasons:          stSig.reasons,
+      status:           "pending",
+      createdAt:        Date.now(),
+      expiresAt:        Date.now() + 4 * 60 * 60 * 1000,
+      executedAt:       null,
+      ctraderPositionId: null,
+      journalId:        null,
+      rejectionReason:  null,
+      errorMessage:     null,
+      source:           'live',
+      backtestRunId:    null,
+      signalType:       "structure_zone_bounce",
+      signalTimeframe:  "4H",
+      signalConfidence: stSig.score,
+      trend:            stSig.direction === "buy" ? "bullish" : "bearish",
+      structure:        null,
+      mtfBias:          null,
+      mtfLabel:         null,
+      atr:              null,
+      inAoi:            true,
+      fibLabel:         null,
+      tradeClass:       "structure",
+      zoneType:         stSig.zoneType,
+      patternType:      stSig.patternType,
+      outcome:          null,
+      closePrice:       null,
+      closeTime:        null,
+      pnlPips:          null,
+      pnlGbp:           null,
+      lineType:         null,
+      lineP1Ts:         null,
+      lineP2Ts:         null,
+      zoneLow:          stSig.zoneLow,
+      zoneHigh:         stSig.zoneHigh,
+    };
 
-        if (env.botInstance?.settings["useDxyFilter"] === true) {
-          const notionalGBP = estimateNotionalGBP(pair, lots, fibSig.entryPrice);
-          if (dxyFilter.wouldBreachExposure(pair, fibSig.direction, notionalGBP)) continue;
-        }
-
-        const signal: BotSignal = {
-          id:               crypto.randomUUID(),
-          botId,
-          pair,
-          direction:        fibSig.direction,
-          entryPrice:       fibSig.entryPrice,
-          stopLoss:         fibSig.stopLoss,
-          takeProfit:       fibSig.takeProfit,
-          lots,
-          score:            fibSig.score,
-          recommendationId: null,
-          reasons:          fibSig.reasons,
-          status:           "pending",
-          createdAt:        Date.now(),
-          expiresAt:        Date.now() + 4 * 60 * 60 * 1000,
-          executedAt:       null,
-          ctraderPositionId: null,
-          journalId:        null,
-          rejectionReason:  null,
-          errorMessage:     null,
-          source:           'live',
-          backtestRunId:    null,
-          signalType:       "fibonacci_pullback",
-          signalTimeframe:  "4H",
-          signalConfidence: fibSig.score,
-          trend:            fibSig.direction === "buy" ? "bullish" : "bearish",
-          structure:        null,
-          mtfBias:          null,
-          mtfLabel:         null,
-          atr:              null,
-          inAoi:            false,
-          fibLabel:         `${fibSig.patternType}`,
-          tradeClass:       "fibonacci",
-          zoneType:         null,
-          patternType:      fibSig.patternType,
-          outcome:          null,
-          closePrice:       null,
-          closeTime:        null,
-          pnlPips:          null,
-          pnlGbp:           null,
-          lineType:         null,
-          lineP1Ts:         null,
-          lineP2Ts:         null,
-          zoneLow:          fibSig.legOriginPrice,
-          zoneHigh:         fibSig.legExtremePrice,
-        };
-
-        if (mode === "approval") {
-          await saveBotSignal(env.DB, signal);
-          result.signalsQueued++;
-        } else {
-          try {
-            if (!trading) throw new Error("No cTrader token");
-            await saveBotSignal(env.DB, signal);
-            await executeSignal(signal, env.DB, env.KV, trading, "market");
-            openCount++;
-            openPositionPairs.add(pair);
-            result.signalsExecuted++;
-          } catch (e) {
-            const msg = (e as Error).message;
-            await updateBotSignalStatus(env.DB, signal.id, "failed", { errorMessage: msg });
-            result.signalsFailed++;
-            result.errors.push(`${pair} ${fibSig.direction}: ${msg}`);
-          }
-        }
-
-        continue;
+    if (mode === "approval") {
+      await saveBotSignal(env.DB, signal);
+      result.signalsQueued++;
+    } else {
+      try {
+        if (!ctx.trading) throw new Error("No cTrader token");
+        await saveBotSignal(env.DB, signal);
+        await executeSignal(signal, env.DB, env.KV, ctx.trading, "market");
+        ctx.openCount++;
+        ctx.openPositionPairs.add(pair);
+        result.signalsExecuted++;
+      } catch (e) {
+        const msg = (e as Error).message;
+        await updateBotSignalStatus(env.DB, signal.id, "failed", { errorMessage: msg });
+        result.signalsFailed++;
+        result.errors.push(`${pair} ${stSig.direction}: ${msg}`);
       }
-    } catch (e) {
-      result.errors.push(`${pair}: ${(e as Error).message}`);
+    }
+
+    return;
+  }
+
+  if (botType === "fibonacci") {
+    const candles4H = await cache.getCandles(pair, "4H", 200);
+    const minReward = (ctx.botInstance?.settings["minReward"] as number | undefined) ?? 1.5;
+    const fibTunables = ctx.botInstance ? pickFibonacciTunables(ctx.botInstance.settings) : {};
+    const fibSig = detectFibonacciSignal(candles4H, ctx.rrRatio, minReward, fibTunables);
+    if (!fibSig) return;
+    if (fibSig.score < ctx.minConfidenceScore) return;
+
+    const confirmedHourUtc = new Date(fibSig.confirmedAt).getUTCHours();
+    if (!ctx.allowedSessions[getTradingSession(confirmedHourUtc)]) return;
+
+    // Cross-bot deconfliction — skip if a trendline-bot position is already open on this
+    // pair/account, unless this fibonacci bot explicitly opts into concurrency. Separate
+    // from allowDuplicatePairs, which only governs duplicates within this same bot.
+    if (ctx.botInstance?.settings["allowConcurrentWithTrendlineBot"] !== true) {
+      const trendlineOpen = await hasOpenPositionFromBotType(env.DB, pair, "trendline", ctx.botInstance?.accountId ?? null);
+      if (trendlineOpen) return;
+    }
+
+    // DXY direction veto — inert unless both this bot's useDxyFilter and the filter's
+    // own separate master toggle are on (both default off).
+    if (ctx.botInstance?.settings["useDxyFilter"] === true) {
+      const dxyGate = ctx.dxyFilter.isTradeAllowed(pair, fibSig.direction, botId);
+      if (!dxyGate.allowed) return;
+    }
+
+    result.signalsFound++;
+
+    const lots = calcLots(ctx.riskAmount, pair, fibSig.entryPrice, fibSig.stopLoss);
+    if (lots <= 0) return;
+
+    if (ctx.botInstance?.settings["useDxyFilter"] === true) {
+      const notionalGBP = estimateNotionalGBP(pair, lots, fibSig.entryPrice);
+      if (ctx.dxyFilter.wouldBreachExposure(pair, fibSig.direction, notionalGBP)) return;
+    }
+
+    const signal: BotSignal = {
+      id:               crypto.randomUUID(),
+      botId,
+      pair,
+      direction:        fibSig.direction,
+      entryPrice:       fibSig.entryPrice,
+      stopLoss:         fibSig.stopLoss,
+      takeProfit:       fibSig.takeProfit,
+      lots,
+      score:            fibSig.score,
+      recommendationId: null,
+      reasons:          fibSig.reasons,
+      status:           "pending",
+      createdAt:        Date.now(),
+      expiresAt:        Date.now() + 4 * 60 * 60 * 1000,
+      executedAt:       null,
+      ctraderPositionId: null,
+      journalId:        null,
+      rejectionReason:  null,
+      errorMessage:     null,
+      source:           'live',
+      backtestRunId:    null,
+      signalType:       "fibonacci_pullback",
+      signalTimeframe:  "4H",
+      signalConfidence: fibSig.score,
+      trend:            fibSig.direction === "buy" ? "bullish" : "bearish",
+      structure:        null,
+      mtfBias:          null,
+      mtfLabel:         null,
+      atr:              null,
+      inAoi:            false,
+      fibLabel:         `${fibSig.patternType}`,
+      tradeClass:       "fibonacci",
+      zoneType:         null,
+      patternType:      fibSig.patternType,
+      outcome:          null,
+      closePrice:       null,
+      closeTime:        null,
+      pnlPips:          null,
+      pnlGbp:           null,
+      lineType:         null,
+      lineP1Ts:         null,
+      lineP2Ts:         null,
+      zoneLow:          fibSig.legOriginPrice,
+      zoneHigh:         fibSig.legExtremePrice,
+    };
+
+    if (mode === "approval") {
+      await saveBotSignal(env.DB, signal);
+      result.signalsQueued++;
+    } else {
+      try {
+        if (!ctx.trading) throw new Error("No cTrader token");
+        await saveBotSignal(env.DB, signal);
+        await executeSignal(signal, env.DB, env.KV, ctx.trading, "market");
+        ctx.openCount++;
+        ctx.openPositionPairs.add(pair);
+        result.signalsExecuted++;
+      } catch (e) {
+        const msg = (e as Error).message;
+        await updateBotSignalStatus(env.DB, signal.id, "failed", { errorMessage: msg });
+        result.signalsFailed++;
+        result.errors.push(`${pair} ${fibSig.direction}: ${msg}`);
+      }
+    }
+
+    return;
+  }
+}
+
+// ── Main orchestrator — pair-outer, bot-inner ─────────────────────────────────
+// Every bot's account/sizing/tuning context is resolved once up front (buildBotContext),
+// then every pair any bot targets is visited once, evaluating each bot that targets it in
+// turn. Two bots sharing a pair (same type or different) now share one candle fetch per
+// (pair, timeframe, count) instead of each independently refetching it, and — since there's
+// no per-bot network round-trip between them any more — effectively evaluate and enter that
+// pair at the same instant rather than however many pairs apart the old bot-outer loop order
+// happened to put them.
+export async function runBotScans(
+  env:  Env,
+  bots: (BotInstance | undefined)[],
+): Promise<Map<string, BotRunResult>> {
+  const results  = new Map<string, BotRunResult>();
+  const contexts = new Map<string, BotContext>();
+
+  for (const bot of bots) {
+    const key = bot?.id ?? "legacy";
+    const built = await buildBotContext(env, bot);
+    if ("doneResult" in built) { results.set(key, built.doneResult); continue; }
+    contexts.set(key, built.ctx);
+  }
+
+  // One shared connection for the whole scan's candle fetching — candle history isn't
+  // account-specific, so any bot's connected TradingService can serve every bot's data needs
+  // this tick. Each bot still places its own trades through its own account's connection
+  // (ctx.trading), unaffected by this.
+  const sharedTrading = [...contexts.values()]
+    .map(c => c.trading)
+    .find((t): t is TradingService => t !== null);
+  const cache = sharedTrading
+    ? new ScanCandleCache(createMarketDataProvider({ provider: env.MARKET_DATA_PROVIDER, trading: sharedTrading }))
+    : null;
+
+  if (cache) {
+    for (const ctx of contexts.values()) {
+      if (!ctx.dxyFilter.isEnabled()) continue;
+      try { await ctx.dxyFilter.refreshRegime(cache); } catch { /* isTradeAllowed degrades gracefully with no regime set */ }
     }
   }
 
-  return result;
+  const allPairs = new Set<CurrencyPair>();
+  for (const ctx of contexts.values()) for (const pair of ctx.targetPairs) allPairs.add(pair);
+
+  for (const pair of allPairs) {
+    for (const ctx of contexts.values()) {
+      if (!ctx.targetPairs.includes(pair)) continue;
+
+      ctx.result.pairsScanned++;
+      try {
+        if (!ctx.allowDuplicatePairs && ctx.openPositionPairs.has(pair)) continue;
+        if (ctx.openCount >= ctx.maxOpenPositions) continue;
+
+        const lastExecuted = await env.KV.get(`bot:last_executed:${ctx.botId}:${pair}`);
+        if (lastExecuted && Date.now() - parseInt(lastExecuted) < 4 * 60 * 60 * 1000) continue;
+
+        if (!cache) throw new Error("cTrader not connected — no data source available to fetch candles");
+        await scanPairForBot(env, ctx, pair, cache);
+      } catch (e) {
+        ctx.result.errors.push(`${pair}: ${(e as Error).message}`);
+      }
+    }
+  }
+
+  for (const [key, ctx] of contexts) results.set(key, ctx.result);
+  return results;
+}
+
+// Back-compat single-bot entry point — used by the per-bot manual "Scan" button, where
+// there's nothing to batch against.
+export async function runBotScan(env: Env & { botInstance?: BotInstance }): Promise<BotRunResult> {
+  const { botInstance, ...rest } = env;
+  const key = botInstance?.id ?? "legacy";
+  const results = await runBotScans(rest, [botInstance]);
+  return results.get(key) ?? {
+    pairsScanned: 0, signalsFound: 0, signalsQueued: 0, signalsExecuted: 0, signalsFailed: 0,
+    errors: ["Unknown error — no result produced"],
+  };
 }

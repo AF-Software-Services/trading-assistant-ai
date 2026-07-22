@@ -18,7 +18,7 @@ import {
   getBotSignals,
   updateBotSignalStatus,
   executeSignal,
-  runBotScan,
+  runBotScans,
   calcLots,
 } from "../bot/engine.ts";
 import { listBots, updateBot } from "../bot/bot-types.ts";
@@ -636,17 +636,19 @@ export function registerTools(server: McpServer, env: Env): void {
       let totalFound = 0, totalQueued = 0, totalExecuted = 0, totalFailed = 0;
       const perBotLines: string[] = [];
 
-      for (const bot of activeBots) {
-        try {
-          const result = await runBotScan({
-            DB:                    env.DB,
-            KV:                    env.KV,
-            MARKET_DATA_PROVIDER:  env.MARKET_DATA_PROVIDER,
-            CTRADER_CLIENT_ID:     env.CTRADER_CLIENT_ID,
-            CTRADER_CLIENT_SECRET: env.CTRADER_CLIENT_SECRET,
-            CTRADER_ACCOUNT_ID:    env.CTRADER_ACCOUNT_ID,
-            botInstance:           bot,
-          });
+      try {
+        const scanResults = await runBotScans({
+          DB:                    env.DB,
+          KV:                    env.KV,
+          MARKET_DATA_PROVIDER:  env.MARKET_DATA_PROVIDER,
+          CTRADER_CLIENT_ID:     env.CTRADER_CLIENT_ID,
+          CTRADER_CLIENT_SECRET: env.CTRADER_CLIENT_SECRET,
+          CTRADER_ACCOUNT_ID:    env.CTRADER_ACCOUNT_ID,
+        }, activeBots);
+
+        for (const bot of activeBots) {
+          const result = scanResults.get(bot.id);
+          if (!result) continue;
           totalFound    += result.signalsFound;
           totalQueued   += result.signalsQueued;
           totalExecuted += result.signalsExecuted;
@@ -656,9 +658,9 @@ export function registerTools(server: McpServer, env: Env): void {
             `${result.signalsQueued} queued, ${result.signalsExecuted} executed, ${result.signalsFailed} failed` +
             (result.errors.length > 0 ? `\n    ${result.errors.join("; ")}` : "")
           );
-        } catch (e) {
-          perBotLines.push(`  ${bot.name}: ERROR — ${(e as Error).message}`);
         }
+      } catch (e) {
+        perBotLines.push(`  ERROR — ${(e as Error).message}`);
       }
 
       return text(

@@ -5,6 +5,7 @@ import {
   updateBotSignalStatus,
   executeSignal,
   runBotScan,
+  runBotScans,
 } from "./engine.ts";
 import { monitorPositions } from "./monitor.ts";
 import { TradingService }                from "../trading/service.ts";
@@ -214,26 +215,27 @@ export function createBotRouter() {
     let totalFound = 0, totalQueued = 0, totalExecuted = 0;
     let scanError: string | null = null;
 
-    for (const bot of activeBots) {
-      try {
-        const r = await runBotScan({
-          DB:                    c.env.DB,
-          KV:                    c.env.KV,
-          MARKET_DATA_PROVIDER:  c.env.MARKET_DATA_PROVIDER,
-          CTRADER_CLIENT_ID:     c.env.CTRADER_CLIENT_ID,
-          CTRADER_CLIENT_SECRET: c.env.CTRADER_CLIENT_SECRET,
-          CTRADER_ACCOUNT_ID:    c.env.CTRADER_ACCOUNT_ID,
-          botInstance:           bot,
-        });
+    try {
+      const scanResults = await runBotScans({
+        DB:                    c.env.DB,
+        KV:                    c.env.KV,
+        MARKET_DATA_PROVIDER:  c.env.MARKET_DATA_PROVIDER,
+        CTRADER_CLIENT_ID:     c.env.CTRADER_CLIENT_ID,
+        CTRADER_CLIENT_SECRET: c.env.CTRADER_CLIENT_SECRET,
+        CTRADER_ACCOUNT_ID:    c.env.CTRADER_ACCOUNT_ID,
+      }, activeBots);
+
+      for (const bot of activeBots) {
+        const r = scanResults.get(bot.id);
+        if (!r) continue;
         results[bot.id] = r;
         totalFound    += r.signalsFound    ?? 0;
         totalQueued   += r.signalsQueued   ?? 0;
         totalExecuted += r.signalsExecuted ?? 0;
-      } catch (e) {
-        const msg = (e as Error).message;
-        results[bot.id] = { error: msg };
-        scanError = scanError ? `${scanError}; ${msg}` : msg;
+        if (r.errors.length) scanError = scanError ? `${scanError}; ${r.errors.join("; ")}` : r.errors.join("; ");
       }
+    } catch (e) {
+      scanError = (e as Error).message;
     }
 
     await saveScanRun(c.env.DB, {
