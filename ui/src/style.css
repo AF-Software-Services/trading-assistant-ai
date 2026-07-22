@@ -1534,6 +1534,11 @@ html, body {
   color: #a855f7;
 }
 
+.bot-type-badge.session-breakout {
+  background: rgba(56,189,248,0.12);
+  color: #38bdf8;
+}
+
 /* ── Account rows ────────────────────────────────────────────────────────────── */
 .account-row {
   display: flex;
