@@ -8,6 +8,8 @@ import { detectStructureSignal } from "../engines/structure-signal.ts";
 import type { StructureTunables } from "../engines/structure-signal.ts";
 import { detectFibonacciSignal } from "../engines/fibonacci-signal.ts";
 import type { FibonacciTunables } from "../engines/fibonacci-signal.ts";
+import { detectSessionBreakoutSignal } from "../engines/session-breakout.ts";
+import type { SessionBreakoutTunables } from "../engines/session-breakout.ts";
 import type { TradingService } from "../trading/service.ts";
 import { pipFactor, PIP_VALUE_GBP } from "../engines/pip-value.ts";
 
@@ -59,8 +61,19 @@ export interface FibonacciBacktestConfig {
   allowedSessions:      Record<TradingSession, boolean>;
 }
 
+export interface SessionBreakoutBacktestConfig {
+  pairs: string[];
+  fromMs: number;
+  toMs: number;
+  accountBalance: number;
+  riskPercent: number;
+  maxOpenPositions:    number;
+  allowDuplicatePairs: boolean;
+  tunables:             Partial<SessionBreakoutTunables>;
+}
+
 // ProtoOATrendbarPeriod values for the timeframes the backtester/prefetch route need.
-const CTRADER_PERIOD: Record<"4H" | "D" | "W", number> = { "4H": 10, "D": 12, "W": 13 };
+const CTRADER_PERIOD: Record<"1H" | "4H" | "D" | "W", number> = { "1H": 9, "4H": 10, "D": 12, "W": 13 };
 
 // 14000 is cTrader's hard per-request cap — for 4H/D1/W1 that's years of history, always
 // more than enough to cover a backtest window plus its lookback padding in one request.
@@ -68,7 +81,7 @@ const MAX_TRENDBARS = 14000;
 
 async function fetchCandlesFromCTrader(
   pair: string,
-  timeframe: "4H" | "D" | "W",
+  timeframe: "1H" | "4H" | "D" | "W",
   toMs: number,
   trading: TradingService,
 ): Promise<Candle[]> {
@@ -88,13 +101,13 @@ async function fetchCandlesFromCTrader(
 // Cache key excludes date range — one cache entry covers all backtest periods, refreshed
 // daily. "_v3" because this is a different data source/shape than the old Twelve Data
 // cache — reusing the old key would silently mix candle shapes from two different feeds.
-export function trendbarCacheKey(pair: string, timeframe: "4H" | "D" | "W"): string {
+export function trendbarCacheKey(pair: string, timeframe: "1H" | "4H" | "D" | "W"): string {
   return `candles_v3:${pair}:${timeframe}`;
 }
 
 export async function fetchCandles(
   pair: string,
-  timeframe: "4H" | "D" | "W",
+  timeframe: "1H" | "4H" | "D" | "W",
   toMs: number,
   trading: TradingService,
   kv?: KVNamespace,
@@ -746,6 +759,163 @@ export async function runFibonacciBacktest(
 
     const pairCount = allSignals.filter(s => s.pair === pair).length;
     progress(`${pair}: ${pairCount} fibonacci signals`);
+  }
+
+  return { signals: allSignals, diagnostics: rejections, log };
+}
+
+export async function runSessionBreakoutBacktest(
+  config: SessionBreakoutBacktestConfig,
+  trading: TradingService,
+  onProgress?: (msg: string) => void,
+  kv?: KVNamespace,
+): Promise<BacktestResult> {
+  const allSignals: BotSignal[] = [];
+  const rejections: Record<string, number> = {};
+  const log: string[] = [];
+  const progress = (msg: string) => { log.push(msg); onProgress?.(msg); };
+
+  // Shared across all pairs — mirrors runBotScan's live constraints.
+  const openPositions: Array<{ pair: string; closeTime: number }> = [];
+  // One trade per pair per Asian session — mirrors the live scan's per-session dedup
+  // (detectSessionBreakoutSignal returns the same sessionStartTs for every candle within
+  // that session's breakout window, so re-detecting it on the next bar is the same setup,
+  // not a new one).
+  const lastSessionStartTs: Record<string, number> = {};
+
+  progress(`Fetching data for ${config.pairs.length} pairs…`);
+  const fetchResults = await Promise.all(config.pairs.map(async (pair) => {
+    try {
+      const { candles } = await fetchCandles(pair, "1H", config.toMs, trading, kv);
+      return { pair, candles1H: candles, error: null as string | null };
+    } catch (err) {
+      return { pair, candles1H: [] as Candle[], error: (err as Error).message };
+    }
+  }));
+
+  for (const { pair, candles1H, error } of fetchResults) {
+    if (error) {
+      progress(`Error fetching ${pair}: ${error}`);
+      continue;
+    }
+
+    progress(`${pair}: 1H=${candles1H.length} candles`);
+
+    const riskAmount = config.accountBalance * (config.riskPercent / 100);
+    const pipVal     = PIP_VALUE_GBP[pair] ?? 7.50;
+
+    const MIN_LOOKBACK = 30;
+
+    let periodStart = candles1H.findIndex(c => c.timestamp >= config.fromMs);
+    if (periodStart === -1) { progress(`${pair}: no candles in test period`); continue; }
+    let periodEnd = candles1H.length;
+    for (let k = periodStart; k < candles1H.length; k++) {
+      if (candles1H[k]!.timestamp > config.toMs) { periodEnd = k; break; }
+    }
+    const inPeriodCount = periodEnd - periodStart;
+    progress(`${pair}: ${inPeriodCount} 1H candles in test period`);
+
+    for (let i = 0; i < inPeriodCount; i++) {
+      if (i % 20 === 0 && i > 0) await new Promise(r => setTimeout(r, 0));
+
+      const absIdx = periodStart + i;
+      const history = candles1H.slice(Math.max(0, absIdx - 199), absIdx + 1);
+      if (history.length < MIN_LOOKBACK) {
+        rejections["insufficient_data"] = (rejections["insufficient_data"] ?? 0) + 1;
+        continue;
+      }
+
+      const cutoff = candles1H[absIdx]!.timestamp;
+
+      // ── Live-bot constraints (must match runBotScan exactly) ──────────────
+      for (let j = openPositions.length - 1; j >= 0; j--) {
+        if (openPositions[j]!.closeTime <= cutoff) openPositions.splice(j, 1);
+      }
+      if (!config.allowDuplicatePairs && openPositions.some(p => p.pair === pair)) {
+        rejections["position_open"] = (rejections["position_open"] ?? 0) + 1;
+        continue;
+      }
+      if (openPositions.length >= config.maxOpenPositions) {
+        rejections["max_positions"] = (rejections["max_positions"] ?? 0) + 1;
+        continue;
+      }
+
+      const sig = detectSessionBreakoutSignal(history, config.tunables);
+      if (!sig) {
+        rejections["no_signal"] = (rejections["no_signal"] ?? 0) + 1;
+        continue;
+      }
+      if (sig.sessionStartTs === lastSessionStartTs[pair]) {
+        rejections["already_traded_session"] = (rejections["already_traded_session"] ?? 0) + 1;
+        continue;
+      }
+
+      const lots = calcLots(riskAmount, pair, sig.entryPrice, sig.stopLoss);
+      if (lots <= 0) continue;
+
+      const forwardCandles = candles1H.slice(absIdx + 1);
+      const outcomeResult = determineOutcome(
+        { pair, direction: sig.direction, entryPrice: sig.entryPrice, stopLoss: sig.stopLoss, takeProfit: sig.takeProfit },
+        forwardCandles,
+      );
+
+      openPositions.push({ pair, closeTime: outcomeResult.closeTime });
+      lastSessionStartTs[pair] = sig.sessionStartTs;
+
+      const pnlGbp = outcomeResult.pnlPips * lots * pipVal;
+
+      const signal: BotSignal = {
+        id:               crypto.randomUUID(),
+        botId:            "backtest-session-breakout",
+        pair:             pair as CurrencyPair,
+        direction:        sig.direction,
+        entryPrice:       sig.entryPrice,
+        stopLoss:         sig.stopLoss,
+        takeProfit:       sig.takeProfit,
+        lots,
+        score:            sig.score,
+        recommendationId: null,
+        reasons:          sig.reasons,
+        status:           "executed",
+        createdAt:        cutoff,
+        expiresAt:        cutoff + 4 * 60 * 60 * 1000,
+        executedAt:       cutoff,
+        ctraderPositionId: null,
+        journalId:        null,
+        rejectionReason:  null,
+        errorMessage:     null,
+        source:           "backtest",
+        backtestRunId:    null, // set by routes.ts
+        signalType:       "session_breakout",
+        signalTimeframe:  "1H",
+        signalConfidence: sig.score,
+        trend:            sig.direction === "buy" ? "bullish" : "bearish",
+        structure:        null,
+        mtfBias:          null,
+        mtfLabel:         null,
+        atr:              null,
+        inAoi:            false,
+        fibLabel:         null,
+        tradeClass:       "session-breakout",
+        zoneType:         null,
+        patternType:      null,
+        outcome:          outcomeResult.outcome,
+        closePrice:       +outcomeResult.closePrice.toFixed(5),
+        closeTime:        outcomeResult.closeTime,
+        pnlPips:          +outcomeResult.pnlPips.toFixed(1),
+        pnlGbp:           +pnlGbp.toFixed(2),
+        lineType:         null,
+        lineP1Ts:         null,
+        lineP2Ts:         null,
+        zoneLow:          sig.sessionLow,
+        zoneHigh:         sig.sessionHigh,
+      };
+
+      allSignals.push(signal);
+    }
+
+    const pairCount = allSignals.filter(s => s.pair === pair).length;
+    progress(`${pair}: ${pairCount} session breakout signals`);
   }
 
   return { signals: allSignals, diagnostics: rejections, log };

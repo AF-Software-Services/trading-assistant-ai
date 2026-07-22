@@ -2336,6 +2336,79 @@ function buildSettingFields(bot: any): string {
           <span style="font-size:10px;color:var(--muted)">allow same pair</span>
         </div>
       </div>
+    </details>` : bot.type === 'session-breakout' ? `
+    <div class="bot-card-row">
+      <span class="bot-card-label">Risk %</span>
+      <div class="bot-card-setting">
+        <input type="number" min="0.1" max="10" step="0.1"
+          value="${bot.settings.riskPercent ?? 1.0}"
+          data-bot-id="${bot.id}" data-key="riskPercent" />
+        <span style="font-size:10px;color:var(--muted)">% per trade</span>
+      </div>
+      <span class="bot-card-label" style="margin-left:12px">Range Multiplier</span>
+      <div class="bot-card-setting">
+        <input type="number" min="0.5" max="3" step="0.1"
+          value="${bot.settings.rangeMultiplier ?? 1.5}"
+          data-bot-id="${bot.id}" data-key="rangeMultiplier" />
+        <span style="font-size:10px;color:var(--muted)">×range width</span>
+      </div>
+    </div>
+    <div class="bot-card-row">
+      <span class="bot-card-label">Max Positions</span>
+      <div class="bot-card-setting">
+        <input type="number" min="1" max="20" step="1"
+          value="${bot.settings.maxOpenPositions ?? 2}"
+          data-bot-id="${bot.id}" data-key="maxOpenPositions" />
+        <span style="font-size:10px;color:var(--muted)">concurrent</span>
+      </div>
+      <span class="bot-card-label" style="margin-left:12px">Allow Duplicates</span>
+      <div class="bot-card-setting" style="align-items:center;gap:6px">
+        <input type="checkbox"
+          ${bot.settings.allowDuplicatePairs ? 'checked' : ''}
+          data-bot-id="${bot.id}" data-key="allowDuplicatePairs" />
+        <span style="font-size:10px;color:var(--muted)">same pair twice</span>
+      </div>
+    </div>
+    <details class="bot-card-advanced">
+      <summary>Advanced — setup tuning</summary>
+      <div class="bot-card-row">
+        <span class="bot-card-label">Break Buffer</span>
+        <div class="bot-card-setting">
+          <input type="number" min="0" max="1" step="0.05"
+            value="${bot.settings.breakBufferAtr ?? 0.1}"
+            data-bot-id="${bot.id}" data-key="breakBufferAtr" />
+          <span style="font-size:10px;color:var(--muted)">×ATR beyond range</span>
+        </div>
+        <span class="bot-card-label" style="margin-left:12px">SL Buffer</span>
+        <div class="bot-card-setting">
+          <input type="number" min="0" max="2" step="0.05"
+            value="${bot.settings.slBufferAtr ?? 0.2}"
+            data-bot-id="${bot.id}" data-key="slBufferAtr" />
+          <span style="font-size:10px;color:var(--muted)">×ATR (nearSide mode only)</span>
+        </div>
+      </div>
+      <div class="bot-card-row">
+        <span class="bot-card-label">Range Width</span>
+        <div class="bot-card-setting">
+          <input type="number" min="0" max="5" step="0.1"
+            value="${bot.settings.minRangeAtr ?? 0.3}"
+            data-bot-id="${bot.id}" data-key="minRangeAtr" />
+          <span style="font-size:10px;color:var(--muted)">to</span>
+          <input type="number" min="0" max="10" step="0.1"
+            value="${bot.settings.maxRangeAtr ?? 3.0}"
+            data-bot-id="${bot.id}" data-key="maxRangeAtr" />
+          <span style="font-size:10px;color:var(--muted)">×ATR</span>
+        </div>
+      </div>
+      <div class="bot-card-row">
+        <span class="bot-card-label">Stop Mode</span>
+        <div class="bot-card-setting">
+          <select class="small-select" data-bot-id="${bot.id}" data-key="slMode">
+            <option value="opposite" ${(bot.settings.slMode ?? 'opposite') === 'opposite' ? 'selected' : ''}>Opposite side of range</option>
+            <option value="nearSide" ${bot.settings.slMode === 'nearSide' ? 'selected' : ''}>Near side (tight)</option>
+          </select>
+        </div>
+      </div>
     </details>` : ''
 
   return settingFields
@@ -2446,7 +2519,7 @@ function initBot(): void {
 
   // ── Render bot cards ───────────────────────────────────────────────────────
   function renderBotCard(bot: any): string {
-    const typeClass = bot.type === 'trendline' ? 'trendline' : bot.type === 'structure' ? 'structure' : bot.type === 'fibonacci' ? 'fibonacci' : ''
+    const typeClass = bot.type === 'trendline' ? 'trendline' : bot.type === 'structure' ? 'structure' : bot.type === 'fibonacci' ? 'fibonacci' : bot.type === 'session-breakout' ? 'session-breakout' : ''
     const pairPills = buildPairPills(bot)
     const settingFields = buildSettingFields(bot)
 
@@ -2805,7 +2878,7 @@ function initBot(): void {
 // is_test rows by default). "Promote to Live" just assigns a real account and flips is_test
 // back off via the same PUT endpoint the Bot tab's own Save button already uses.
 function renderTestBotCard(bot: any): string {
-  const typeClass = bot.type === 'trendline' ? 'trendline' : bot.type === 'structure' ? 'structure' : bot.type === 'fibonacci' ? 'fibonacci' : ''
+  const typeClass = bot.type === 'trendline' ? 'trendline' : bot.type === 'structure' ? 'structure' : bot.type === 'fibonacci' ? 'fibonacci' : bot.type === 'session-breakout' ? 'session-breakout' : ''
   const pairPills = buildPairPills(bot)
   const settingFields = buildSettingFields(bot)
 
@@ -3081,12 +3154,14 @@ async function initBacktestTab(): Promise<void> {
 function botTypeShortLabel(type: string): string {
   if (type === 'structure') return 'S/R zone bounce'
   if (type === 'fibonacci') return 'Golden pocket pullback'
+  if (type === 'session-breakout') return 'Asian session breakout'
   return 'Trendline break + retest'
 }
 
 function botTypeDisplayName(type: string): string {
   if (type === 'structure') return 'Structure Bot'
   if (type === 'fibonacci') return 'Fibonacci Bot'
+  if (type === 'session-breakout') return 'Session Breakout Bot'
   return 'Trendline Bot'
 }
 
@@ -3323,6 +3398,7 @@ function renderBacktestResults(run: any): void {
     ? botTypeDisplayName(cfg.botType)
     : trades.some((t: any) => t.trade_class === 'structure') ? 'Structure Bot'
     : trades.some((t: any) => t.trade_class === 'fibonacci') ? 'Fibonacci Bot'
+    : trades.some((t: any) => t.trade_class === 'session-breakout') ? 'Session Breakout Bot'
     : 'Trendline Bot'
   ;(document.getElementById('bt-results-title') as HTMLElement).textContent =
     `Results — ${strategyLabel} — ${(cfg.pairs ?? []).join(', ')} — ${safeDate(cfg.fromMs)} to ${safeDate(cfg.toMs)}`
@@ -3512,7 +3588,7 @@ async function loadBacktestRuns(): Promise<void> {
       const dateStr    = safeDateTime(r.started_at).replace('—', '?')
       const pnlStr     = s ? (s.totalPnl >= 0 ? `+£${s.totalPnl}` : `-£${Math.abs(s.totalPnl)}`) : ''
       const winStr     = s ? `${s.wins}W/${s.losses}L (${s.winRate}%)` : ''
-      const stratLabel = cfg?.botType === 'structure' ? 'STR' : cfg?.botType === 'fibonacci' ? 'FIB' : 'TL'
+      const stratLabel = cfg?.botType === 'structure' ? 'STR' : cfg?.botType === 'fibonacci' ? 'FIB' : cfg?.botType === 'session-breakout' ? 'SB' : 'TL'
       return `<div class="bt-run-row" data-run-id="${r.id}">
         <span class="bt-run-date">${dateStr}</span>
         <span class="bt-run-strategy-badge">${stratLabel}</span>

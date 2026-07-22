@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { Env } from "../index.ts";
-import { runTrendlineBacktest, runStructureBacktest, runFibonacciBacktest, buildSummary, fetchCandles, trendbarCacheKey } from "./runner.ts";
+import { runTrendlineBacktest, runStructureBacktest, runFibonacciBacktest, runSessionBreakoutBacktest, buildSummary, fetchCandles, trendbarCacheKey } from "./runner.ts";
 import type { BacktestConfig, BacktestResult } from "./runner.ts";
 import { saveBotSignal } from "../bot/engine.ts";
 import { getBot } from "../bot/bot-types.ts";
@@ -8,6 +8,7 @@ import { getAccount, getPrimaryAccountBalance } from "../ctrader/account-types.t
 import { pickTrendlineTunables } from "../engines/trendline.ts";
 import { pickStructureTunables } from "../engines/structure-signal.ts";
 import { pickFibonacciTunables } from "../engines/fibonacci-signal.ts";
+import { pickSessionBreakoutTunables } from "../engines/session-breakout.ts";
 import { TradingService } from "../trading/service.ts";
 
 
@@ -54,6 +55,7 @@ export function createBacktestRouter() {
     const structureTunables = pickStructureTunables(botInstance.settings);
     const fibonacciTunables = pickFibonacciTunables(botInstance.settings);
     const minReward          = (botInstance.settings["minReward"] as number | undefined) ?? 1.5;
+    const sessionBreakoutTunables = pickSessionBreakoutTunables(botInstance.settings);
     const tpMode = (botInstance.settings["tpMode"] === "atLevel" ? "atLevel" : "rr") as "rr" | "atLevel";
     const requireCandleConfirmation = botInstance.settings["requireCandleConfirmation"] === true;
     const allowedSessions = {
@@ -89,6 +91,13 @@ export function createBacktestRouter() {
           : botInstance.type === "fibonacci"
           ? await runFibonacciBacktest(
               { pairs, fromMs, toMs, accountBalance, riskPercent, rewardRisk, minReward, maxOpenPositions, allowDuplicatePairs, tunables: fibonacciTunables, allowedSessions },
+              trading,
+              (msg) => console.log(`[backtest ${runId}] ${msg}`),
+              c.env.KV,
+            )
+          : botInstance.type === "session-breakout"
+          ? await runSessionBreakoutBacktest(
+              { pairs, fromMs, toMs, accountBalance, riskPercent, maxOpenPositions, allowDuplicatePairs, tunables: sessionBreakoutTunables },
               trading,
               (msg) => console.log(`[backtest ${runId}] ${msg}`),
               c.env.KV,
@@ -177,8 +186,10 @@ export function createBacktestRouter() {
 
     const results: Record<string, string> = {};
 
-    // Trendline bot needs 4H + daily (for bias filter); structure bot needs all three
-    const timeframes: Array<"4H" | "D" | "W"> = resolvedType === "trendline" ? ["D", "4H"] : ["W", "D", "4H"];
+    // Trendline bot needs 4H + daily (for bias filter); structure bot needs all three;
+    // session-breakout works entirely off 1H candles (session boundaries are hour-precise).
+    const timeframes: Array<"1H" | "4H" | "D" | "W"> = resolvedType === "session-breakout" ? ["1H"]
+      : resolvedType === "trendline" ? ["D", "4H"] : ["W", "D", "4H"];
     for (const timeframe of timeframes) {
       const cacheKey = trendbarCacheKey(pair, timeframe);
       const cached   = await c.env.KV.get(cacheKey, "json") as Array<{ timestamp: number }> | null;

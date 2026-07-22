@@ -18,11 +18,11 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20241112.0",
+    "@cloudflare/workers-types": "^5.20260721.1",
     "@types/node": "^22.0.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0",
-    "wrangler": "^3.80.0"
+    "wrangler": "^4.113.0"
   },
   "allowScripts": {
     "esbuild@0.21.5": true,

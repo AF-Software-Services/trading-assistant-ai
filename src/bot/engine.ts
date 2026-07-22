@@ -7,6 +7,7 @@ import { detectTrendlineSignal, pickTrendlineTunables, getTradingSession } from 
 import type { TradingSession }             from "../engines/trendline.ts";
 import { detectStructureSignal, pickStructureTunables } from "../engines/structure-signal.ts";
 import { detectFibonacciSignal, pickFibonacciTunables } from "../engines/fibonacci-signal.ts";
+import { detectSessionBreakoutSignal, pickSessionBreakoutTunables } from "../engines/session-breakout.ts";
 import { DxyFilter, estimateNotionalGBP } from "../engines/dxy-filter.ts";
 import type { DxyFilterConfig, OpenPositionForExposure } from "../engines/dxy-filter.ts";
 import { storeTrendlineTrailState }        from "./monitor.ts";
@@ -672,6 +673,87 @@ async function scanPairForBot(
         await updateBotSignalStatus(env.DB, signal.id, "failed", { errorMessage: msg });
         result.signalsFailed++;
         result.errors.push(`${pair} ${fibSig.direction}: ${msg}`);
+      }
+    }
+
+    return;
+  }
+
+  if (botType === "session-breakout") {
+    const candles1H = await cache.getCandles(pair, "1H", 200);
+    const sbTunables = ctx.botInstance ? pickSessionBreakoutTunables(ctx.botInstance.settings) : {};
+    const sbSig = detectSessionBreakoutSignal(candles1H, sbTunables);
+    if (!sbSig) return;
+    if (sbSig.score < ctx.minConfidenceScore) return;
+
+    result.signalsFound++;
+
+    const lots = calcLots(ctx.riskAmount, pair, sbSig.entryPrice, sbSig.stopLoss);
+    if (lots <= 0) return;
+
+    const signal: BotSignal = {
+      id:               crypto.randomUUID(),
+      botId,
+      pair,
+      direction:        sbSig.direction,
+      entryPrice:       sbSig.entryPrice,
+      stopLoss:         sbSig.stopLoss,
+      takeProfit:       sbSig.takeProfit,
+      lots,
+      score:            sbSig.score,
+      recommendationId: null,
+      reasons:          sbSig.reasons,
+      status:           "pending",
+      createdAt:        Date.now(),
+      expiresAt:        Date.now() + 4 * 60 * 60 * 1000,
+      executedAt:       null,
+      ctraderPositionId: null,
+      journalId:        null,
+      rejectionReason:  null,
+      errorMessage:     null,
+      source:           'live',
+      backtestRunId:    null,
+      signalType:       "session_breakout",
+      signalTimeframe:  "1H",
+      signalConfidence: sbSig.score,
+      trend:            sbSig.direction === "buy" ? "bullish" : "bearish",
+      structure:        null,
+      mtfBias:          null,
+      mtfLabel:         null,
+      atr:              null,
+      inAoi:            false,
+      fibLabel:         null,
+      tradeClass:       "session-breakout",
+      zoneType:         null,
+      patternType:      null,
+      outcome:          null,
+      closePrice:       null,
+      closeTime:        null,
+      pnlPips:          null,
+      pnlGbp:           null,
+      lineType:         null,
+      lineP1Ts:         null,
+      lineP2Ts:         null,
+      zoneLow:          sbSig.sessionLow,
+      zoneHigh:         sbSig.sessionHigh,
+    };
+
+    if (mode === "approval") {
+      await saveBotSignal(env.DB, signal);
+      result.signalsQueued++;
+    } else {
+      try {
+        if (!ctx.trading) throw new Error("No cTrader token");
+        await saveBotSignal(env.DB, signal);
+        await executeSignal(signal, env.DB, env.KV, ctx.trading, "market");
+        ctx.openCount++;
+        ctx.openPositionPairs.add(pair);
+        result.signalsExecuted++;
+      } catch (e) {
+        const msg = (e as Error).message;
+        await updateBotSignalStatus(env.DB, signal.id, "failed", { errorMessage: msg });
+        result.signalsFailed++;
+        result.errors.push(`${pair} ${sbSig.direction}: ${msg}`);
       }
     }
 

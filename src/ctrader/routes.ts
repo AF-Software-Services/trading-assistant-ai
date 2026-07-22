@@ -20,7 +20,7 @@ import { createMarketDataProvider } from '../providers/factory.ts';
 import type { CurrencyPair } from '../types/market.ts';
 import { getBotSignals } from '../bot/signal-store.ts';
 import { listBots } from '../bot/bot-types.ts';
-import { PIP_SIZE, PIP_VALUE_GBP } from '../engines/pip-value.ts';
+import { PIP_SIZE, PIP_VALUE_GBP, pipFactor } from '../engines/pip-value.ts';
 
 interface Env {
   DB:                    D1Database;
@@ -447,7 +447,6 @@ export function createCTraderRouter() {
         : c.json({ error: msg }, 502);
     }
   });
-
 
   return app;
 }

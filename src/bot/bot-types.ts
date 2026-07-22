@@ -4,7 +4,7 @@ import type { CurrencyPair } from "../types/market.ts";
 // To add a new bot type: add an entry to BOT_TYPE_REGISTRY with id, displayName,
 // description, and defaultSettings. The engine will pick up the type automatically.
 
-export type BotTypeId = "trendline" | "structure" | "fibonacci";
+export type BotTypeId = "trendline" | "structure" | "fibonacci" | "session-breakout";
 
 export interface BotTypeDefinition {
   id:             BotTypeId;
@@ -100,6 +100,41 @@ export const BOT_TYPE_REGISTRY: BotTypeDefinition[] = [
       // default) is enabled too. See src/engines/dxy-filter.ts.
       useDxyFilter:        false,
       allowConcurrentWithTrendlineBot: false,
+      maxOpenPositions:    2,
+      allowDuplicatePairs: false,
+    },
+  },
+  {
+    id:          "session-breakout",
+    displayName: "Session Breakout Bot",
+    description: "Trades the breakout of the Asian session's consolidation range once London/NY opens — a distinct mechanism from the other bots (session volatility expansion, not a trendline, S/R zone, or fib retracement).",
+    defaultSettings: {
+      // No continuous confidence gate beyond the engine's own deterministic checks (range
+      // width bounds + break confirmation) — kept at 0 so it never adds extra filtering by
+      // default; the field exists for UI consistency with the other bot types.
+      minConfidenceScore: 0,
+      riskPercent:      1.0,
+      // TP = range width * this, projected from the breakout. Found empirically: 1.0 (TP =
+      // exactly the range width) loses money despite a good win rate, because the stop sits
+      // on the far side of the whole range while the target is measured from entry — a
+      // structurally worse-than-1:1 setup. 1.5 was the best performer tested across a 1-year
+      // backtest on 6 majors (only rangeMultiplier that came close to breakeven; wider ate
+      // into win rate faster than it added reward).
+      rangeMultiplier:  1.5,
+      // How far past the range edge counts as a genuine break, in ATR — filters out marginal
+      // noise-level pokes through the level.
+      breakBufferAtr:   0.1,
+      // Reject if the Asian range itself is already wider than this many ATRs — that means
+      // Asia was trending, not consolidating, so there's no real level to break.
+      maxRangeAtr:      3.0,
+      // Reject if the range is narrower than this many ATRs — too flat to mean anything.
+      minRangeAtr:      0.3,
+      // "opposite" (stop at the far side of the whole range) beat "nearSide" (stop just
+      // beyond the breakout level) badly in testing — a tight stop gets hit by the very
+      // common post-breakout pullback/retest before the real move continues (25% win rate,
+      // deeply negative P&L). Kept configurable but this is the validated default.
+      slMode:           "opposite",
+      slBufferAtr:      0.2, // only used by "nearSide" mode
       maxOpenPositions:    2,
       allowDuplicatePairs: false,
     },
