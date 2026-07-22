@@ -437,11 +437,18 @@ async function ensureSymbolCache(conn: TcpConnection, accountId: number): Promis
     byId.set(sym.symbolId, formatted);
   }
 
-  // Merge hardcoded fallback for any pair the live list didn't include
+  // Merge hardcoded fallback for any pair the live list didn't include. byId always takes the
+  // hardcoded name when we have one, even overriding what the live list just set — formatPair()
+  // only knows how to reformat standard 6-char forex codes ("GBPCAD" → "GBP/CAD"); a broker's
+  // own display name for anything else (e.g. Pepperstone's "SpotCrude" for WTI/USD) passes
+  // through formatPair unchanged, and that raw broker name doesn't match the internal pair
+  // string PIP_SIZE/PIP_VALUE_GBP are keyed by — so it silently fell through to the generic
+  // forex defaults there (0.0001 pip size, £7.50/pip), producing a wildly wrong unrealised P&L
+  // for a live open position. Every id in SYMBOL_IDS already has a correct, curated pair name.
   for (const [pair, id] of Object.entries(SYMBOL_IDS)) {
     const norm = normalizePair(pair);
     if (!byName.has(norm)) byName.set(norm, id);
-    if (!byId.has(id))     byId.set(id, pair);
+    byId.set(id, pair);
   }
 
   symbolIdByName.set(accountId, byName);
