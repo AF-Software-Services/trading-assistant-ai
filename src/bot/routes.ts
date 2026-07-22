@@ -19,7 +19,7 @@ import {
   BOT_TYPE_REGISTRY,
 } from "./bot-types.ts";
 import type { BotInstance, BotTypeId } from "./bot-types.ts";
-import { PHASE1_PAIRS } from "../types/market.ts";
+import { ALL_TRADEABLE_PAIRS } from "../types/market.ts";
 import type { CurrencyPair } from "../types/market.ts";
 import { saveScanRun } from "../storage/d1.ts";
 import type { ScanRun } from "../storage/d1.ts";
@@ -66,7 +66,7 @@ export function createBotRouter() {
     if (!typeDef) return c.json({ error: `Unknown bot type: ${body.type}` }, 400);
 
     const pairs = (body.pairs ?? []).filter(p =>
-      PHASE1_PAIRS.includes(p as CurrencyPair)
+      ALL_TRADEABLE_PAIRS.includes(p as CurrencyPair)
     ) as CurrencyPair[];
 
     const isTest = body.isTest === true;
@@ -239,7 +239,7 @@ export function createBotRouter() {
     await saveScanRun(c.env.DB, {
       id:                       crypto.randomUUID(),
       sessionName:              "manual_scan",
-      pairsScanned:             PHASE1_PAIRS,
+      pairsScanned:             ALL_TRADEABLE_PAIRS,
       recommendationsGenerated: 0,
       createdAt:                scanStart,
       durationMs:               Date.now() - scanStart,

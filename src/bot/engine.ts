@@ -1,4 +1,4 @@
-import { PHASE1_PAIRS }                    from "../types/market.ts";
+import { ALL_TRADEABLE_PAIRS }             from "../types/market.ts";
 import type { CurrencyPair }               from "../types/market.ts";
 import type { BotInstance }                from "./bot-types.ts";
 import { createMarketDataProvider }        from "../providers/factory.ts";
@@ -257,7 +257,7 @@ export async function runBotScan(env: {
     trading,
   });
 
-  const targetPairs = targetPairsOverride ?? (PHASE1_PAIRS as CurrencyPair[]);
+  const targetPairs = targetPairsOverride ?? ALL_TRADEABLE_PAIRS;
 
   // Master toggle defaults to { enabled: false } (DEFAULT_DXY_FILTER_CONFIG) until the user
   // explicitly saves settings via PUT /api/v1/settings/dxy-filter — an existing bot's behavior

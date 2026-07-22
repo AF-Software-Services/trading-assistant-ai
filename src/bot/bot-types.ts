@@ -117,7 +117,7 @@ export interface BotInstance {
   name:       string;
   type:       BotTypeId;
   mode:       "off" | "approval" | "autonomous";
-  pairs:      CurrencyPair[];    // empty = all PHASE1_PAIRS
+  pairs:      CurrencyPair[];    // empty = all ALL_TRADEABLE_PAIRS
   settings:   Record<string, unknown>;
   accountId:  string | null;     // null = no account assigned
   createdAt:  number;

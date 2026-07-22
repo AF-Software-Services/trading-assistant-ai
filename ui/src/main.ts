@@ -2061,9 +2061,9 @@ const ALL_PAIRS = Object.values(PAIR_CATEGORIES).flat()
 function buildPairPills(bot: any): string {
   return Object.entries(PAIR_CATEGORIES).map(([category, pairs]) => {
     const pills = pairs.map(p => {
-      // Empty pairs falls back to forex-only in the backend scan (bot/engine.ts), not all 16 —
-      // mirror that here instead of highlighting every pill.
-      const active = bot.pairs.length === 0 ? PAIR_CATEGORIES.Forex.includes(p) : bot.pairs.includes(p)
+      // Empty pairs means "scan every tradeable pair" in the backend (bot/engine.ts) — mirror
+      // that here by highlighting every pill, rather than showing an all-inactive card.
+      const active = bot.pairs.length === 0 ? true : bot.pairs.includes(p)
       return `<span class="bot-pair-pill ${active ? 'active' : ''}" data-pair="${p}" data-bot-id="${bot.id}">${p}</span>`
     }).join('')
     return `<div class="pair-category-group">
