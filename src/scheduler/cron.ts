@@ -1,5 +1,5 @@
 import { ALL_TRADEABLE_PAIRS } from "../types/market.ts";
-import { runBotScan }   from "../bot/engine.ts";
+import { runBotScans }  from "../bot/engine.ts";
 import { listBots, seedBotsFromLegacyKV } from "../bot/bot-types.ts";
 import { monitorPositions } from "../bot/monitor.ts";
 import { saveScanRun } from "../storage/d1.ts";
@@ -61,31 +61,34 @@ export async function handleCronTrigger(
       const botErrors: string[] = [];
 
       try {
-        // ── 1. Run all active bot scans ─────────────────────────────────────────
+        // ── 1. Run all active bot scans — pair-outer, bot-inner (see runBotScans) ──
         await seedBotsFromLegacyKV(env.DB, env.KV);
         const bots       = await listBots(env.DB);
         const activeBots = bots.filter(b => b.mode !== "off");
 
-        for (const bot of activeBots) {
-          try {
-            const r = await runBotScan({
-              DB:                    env.DB,
-              KV:                    env.KV,
-              MARKET_DATA_PROVIDER:  env.MARKET_DATA_PROVIDER,
-              CTRADER_CLIENT_ID:     env.CTRADER_CLIENT_ID,
-              CTRADER_CLIENT_SECRET: env.CTRADER_CLIENT_SECRET,
-              CTRADER_ACCOUNT_ID:    env.CTRADER_ACCOUNT_ID,
-              botInstance:           bot,
-            });
+        try {
+          const scanResults = await runBotScans({
+            DB:                    env.DB,
+            KV:                    env.KV,
+            MARKET_DATA_PROVIDER:  env.MARKET_DATA_PROVIDER,
+            CTRADER_CLIENT_ID:     env.CTRADER_CLIENT_ID,
+            CTRADER_CLIENT_SECRET: env.CTRADER_CLIENT_SECRET,
+            CTRADER_ACCOUNT_ID:    env.CTRADER_ACCOUNT_ID,
+          }, activeBots);
+
+          for (const bot of activeBots) {
+            const r = scanResults.get(bot.id);
+            if (!r) continue;
             totalFound    += r.signalsFound    ?? 0;
             totalQueued   += r.signalsQueued   ?? 0;
             totalExecuted += r.signalsExecuted ?? 0;
+            if (r.errors.length) botErrors.push(`${bot.name}: ${r.errors.join("; ")}`);
             console.log(`[Cron] ${bot.name}: ${r.signalsFound} signals, ${r.signalsQueued} queued, ${r.signalsExecuted} executed`);
-          } catch (err) {
-            const msg = `${bot.name}: ${(err as Error).message}`;
-            botErrors.push(msg);
-            console.error(`[Cron] Bot error: ${msg}`);
           }
+        } catch (err) {
+          const msg = (err as Error).message;
+          botErrors.push(msg);
+          console.error(`[Cron] Bot scan error: ${msg}`);
         }
 
         // ── 2. Monitor open positions ───────────────────────────────────────────
