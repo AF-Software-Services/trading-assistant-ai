@@ -2061,9 +2061,9 @@ const ALL_PAIRS = Object.values(PAIR_CATEGORIES).flat()
 function buildPairPills(bot: any): string {
   return Object.entries(PAIR_CATEGORIES).map(([category, pairs]) => {
     const pills = pairs.map(p => {
-      // Empty pairs means "scan every tradeable pair" in the backend (bot/engine.ts) — mirror
-      // that here by highlighting every pill, rather than showing an all-inactive card.
-      const active = bot.pairs.length === 0 ? true : bot.pairs.includes(p)
+      // No fallback in the backend (bot/engine.ts) — a bot with no pairs selected scans
+      // nothing, so an all-inactive card here is the accurate state, not a display bug.
+      const active = bot.pairs.includes(p)
       return `<span class="bot-pair-pill ${active ? 'active' : ''}" data-pair="${p}" data-bot-id="${bot.id}">${p}</span>`
     }).join('')
     return `<div class="pair-category-group">
@@ -3032,7 +3032,7 @@ function initTestBotModal(): void {
 let backtestBotsCache: Record<string, any> = {}
 
 function resolveBacktestPairs(bot: any): string[] {
-  return (bot?.pairs?.length ?? 0) > 0 ? bot.pairs : PAIR_CATEGORIES.Forex
+  return bot?.pairs ?? []
 }
 
 async function initBacktestTab(): Promise<void> {

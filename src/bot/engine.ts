@@ -1,4 +1,3 @@
-import { ALL_TRADEABLE_PAIRS }             from "../types/market.ts";
 import type { CurrencyPair }               from "../types/market.ts";
 import type { BotInstance }                from "./bot-types.ts";
 import { createMarketDataProvider }        from "../providers/factory.ts";
@@ -133,7 +132,10 @@ export async function runBotScan(env: {
   let allowDuplicatePairs: boolean;
   let botId: string;
   let botType: string;
-  let targetPairsOverride: CurrencyPair[] | null = null;
+  // No fallback — a bot scans exactly the pairs it's configured with, even if that's none.
+  // Silently substituting some other pair list when this is empty (as the old code did)
+  // means a bot's actual coverage can silently diverge from what its own settings say.
+  let targetPairs: CurrencyPair[];
 
   if (env.botInstance) {
     const bot = env.botInstance;
@@ -144,7 +146,7 @@ export async function runBotScan(env: {
     allowDuplicatePairs = bot.settings.allowDuplicatePairs as boolean;
     botId               = bot.id;
     botType            = bot.type;
-    targetPairsOverride = bot.pairs.length > 0 ? bot.pairs : null;
+    targetPairs         = bot.pairs;
   } else {
     const settings = await getBotSettings(env.KV);
     mode               = settings.mode;
@@ -154,7 +156,7 @@ export async function runBotScan(env: {
     allowDuplicatePairs = settings.allowDuplicatePairs;
     botId               = "legacy";
     botType            = "trendline";
-    targetPairsOverride = settings.pairs.length > 0 ? settings.pairs as CurrencyPair[] : null;
+    targetPairs         = settings.pairs as CurrencyPair[];
   }
 
   if (mode === "off") {
@@ -256,8 +258,6 @@ export async function runBotScan(env: {
     provider: env.MARKET_DATA_PROVIDER,
     trading,
   });
-
-  const targetPairs = targetPairsOverride ?? ALL_TRADEABLE_PAIRS;
 
   // Master toggle defaults to { enabled: false } (DEFAULT_DXY_FILTER_CONFIG) until the user
   // explicitly saves settings via PUT /api/v1/settings/dxy-filter — an existing bot's behavior

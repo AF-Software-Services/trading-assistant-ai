@@ -117,7 +117,7 @@ export interface BotInstance {
   name:       string;
   type:       BotTypeId;
   mode:       "off" | "approval" | "autonomous";
-  pairs:      CurrencyPair[];    // empty = all ALL_TRADEABLE_PAIRS
+  pairs:      CurrencyPair[];    // no fallback — a bot scans exactly these, even if empty
   settings:   Record<string, unknown>;
   accountId:  string | null;     // null = no account assigned
   createdAt:  number;
