@@ -157,9 +157,8 @@ export const BOT_TYPE_REGISTRY: BotTypeDefinition[] = [
       // Only used if no opposite-type active line exists yet at entry time to fall back on —
       // the normal case is a dynamic opposite-line take-profit, not this fixed multiple.
       fallbackRewardRisk: 2.0,
-      // Simple percentage-off-current-price trailing stop, replacing the original bot's
-      // trendline-slope trail for this strategy specifically — only ever tightens, never loosens.
-      trailPercent:       1.0,
+      // Trailing is cTrader's own native trailing stop (enabled at order placement), not a
+      // client-side percentage — no separate tunable needed for it.
       maxOpenPositions:    2,
       // A second known line breaking on the same pair while a trade from the first line is
       // still open is meant to open an independent second trade, not be suppressed — the

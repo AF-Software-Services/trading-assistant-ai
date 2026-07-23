@@ -238,6 +238,10 @@ const NEW_ORDER_REQ_SCHEMA: MessageSchema = {
   timeInForce:          { no: 9,  type: { t: 'varint' } },
   stopLoss:             { no: 11, type: { t: 'double' } },
   takeProfit:           { no: 12, type: { t: 'double' } },
+  // Bool, wire-encoded as varint 0/1 — cTrader's own server-side trailing stop. Once set, the
+  // broker trails stopLoss automatically, maintaining the same distance from price that this
+  // order's initial stopLoss was placed at — no repeated amendPosition polling needed.
+  trailingStopLoss:     { no: 22, type: { t: 'varint' } },
 };
 const CANCEL_ORDER_REQ_SCHEMA: MessageSchema = {
   ctidTraderAccountId: { no: 2, type: { t: 'varint' } },
@@ -248,6 +252,7 @@ const AMEND_POSITION_SLTP_REQ_SCHEMA: MessageSchema = {
   positionId:           { no: 3, type: { t: 'varint' } },
   stopLoss:             { no: 4, type: { t: 'double' } },
   takeProfit:           { no: 5, type: { t: 'double' } },
+  trailingStopLoss:     { no: 8, type: { t: 'varint' } },
 };
 const CLOSE_POSITION_REQ_SCHEMA: MessageSchema = {
   ctidTraderAccountId: { no: 2, type: { t: 'varint' } },
@@ -940,6 +945,7 @@ export class CTraderClient {
     limitPrice?: number;
     stopLoss?:   number;
     takeProfit?: number;
+    trailingStopLoss?: boolean;
   }): Promise<{ orderId: number }> {
     const conn = await this.connect();
     try {
@@ -974,6 +980,9 @@ export class CTraderClient {
       if (params.limitPrice) { payload.limitPrice = round(params.limitPrice); payload.timeInForce = TIME_IN_FORCE_GTC; }
       if (params.stopLoss)   payload.stopLoss   = round(params.stopLoss);
       if (params.takeProfit) payload.takeProfit = round(params.takeProfit);
+      // Only meaningful alongside a stopLoss — the broker trails from whatever distance that
+      // stop was placed at.
+      if (params.trailingStopLoss && params.stopLoss) payload.trailingStopLoss = 1;
 
       await conn.send(PT.NEW_ORDER_REQ, NEW_ORDER_REQ_SCHEMA, payload);
       // Limit orders (retest entries) can sit pending for a long time before price reaches
@@ -989,7 +998,7 @@ export class CTraderClient {
   // `pair` is optional only because one manual UI route doesn't have it on hand yet — when
   // given, prices are re-rounded to the broker's real digits for this symbol, same as
   // placeOrder(); without it, prices are sent as the caller rounded them (unchanged behavior).
-  async amendPosition(positionId: number, stopLoss: number, takeProfit?: number, pair?: string): Promise<void> {
+  async amendPosition(positionId: number, stopLoss: number, takeProfit?: number, pair?: string, trailingStopLoss?: boolean): Promise<void> {
     const conn = await this.connect();
     try {
       await this.auth(conn);
@@ -1006,6 +1015,7 @@ export class CTraderClient {
 
       const payload: Record<string, unknown> = { ctidTraderAccountId: this.cfg.accountId, positionId, stopLoss: round(stopLoss) };
       if (takeProfit !== undefined) payload.takeProfit = round(takeProfit);
+      if (trailingStopLoss) payload.trailingStopLoss = 1;
       await conn.send(PT.AMEND_POSITION_SLTP_REQ, AMEND_POSITION_SLTP_REQ_SCHEMA, payload);
       await conn.waitForExecution(EXECUTION_EVENT_SCHEMA);
     } finally { conn.close(); }

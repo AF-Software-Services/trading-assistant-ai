@@ -13,7 +13,7 @@ import { getActiveLines, saveDiscoveredLine, retireLine } from "./trendline-v2-s
 import { calculateATR } from "../engines/trend.ts";
 import { DxyFilter, estimateNotionalGBP } from "../engines/dxy-filter.ts";
 import type { DxyFilterConfig, OpenPositionForExposure } from "../engines/dxy-filter.ts";
-import { storeTrendlineTrailState, storeTrendlineV2TrailState } from "./monitor.ts";
+import { storeTrendlineTrailState } from "./monitor.ts";
 import { TradingService }                  from "../trading/service.ts";
 import { getAccount, updateAccountBalance, getPrimaryAccountBalance } from "../ctrader/account-types.ts";
 import { createJournalEntry, buildFeaturesFromContext } from "../storage/journal.ts";
@@ -77,6 +77,7 @@ export async function executeSignal(
   kv:      KVNamespace,
   trading: TradingService,
   orderType: "market" | "limit" = "limit",
+  trailingStopLoss = false,
 ): Promise<void> {
   const { orderId } = await trading.placeOrder({
     pair:       signal.pair,
@@ -85,6 +86,7 @@ export async function executeSignal(
     ...(orderType === "limit" ? { limitPrice: signal.entryPrice } : {}),
     stopLoss:   signal.stopLoss,
     takeProfit: signal.takeProfit,
+    trailingStopLoss,
   });
 
   const features = buildFeaturesFromContext({
@@ -837,7 +839,7 @@ async function scanPairForBot(
     // monitor tick via hasCrossedOppositeLine, not a fixed price. Falls back to a fixed R:R
     // multiple only if no opposite line is known yet.
     const remainingActiveLines = await getActiveLines(env.DB, botId, pair);
-    const oppositeLine = pickOppositeLine(remainingActiveLines, tlv2Sig.lineType);
+    const oppositeLine = pickOppositeLine(remainingActiveLines, tlv2Sig.lineType, candles4H[candles4H.length - 1]!.timestamp);
     const stopDist = Math.abs(tlv2Sig.entryPrice - tlv2Sig.stopLoss);
     const takeProfit = oppositeLine
       ? projectLineAt(oppositeLine, Date.now())
@@ -900,8 +902,10 @@ async function scanPairForBot(
       try {
         if (!ctx.trading) throw new Error("No cTrader token");
         await saveBotSignal(env.DB, signal);
-        await executeSignal(signal, env.DB, env.KV, ctx.trading, "limit");
-        await storeTrendlineV2TrailState(env.KV, signal.id, v2Tunables.trailPercent, signal.stopLoss);
+        // trailingStopLoss: true — cTrader trails this SL server-side from here on, maintaining
+        // the same distance it was placed at (the retest-based stop distance); no client-side
+        // trail state to store or poll.
+        await executeSignal(signal, env.DB, env.KV, ctx.trading, "limit", true);
         ctx.openCount++;
         ctx.openPositionPairs.add(pair);
         result.signalsExecuted++;

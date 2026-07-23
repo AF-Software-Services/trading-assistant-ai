@@ -950,11 +950,13 @@ export async function runSessionBreakoutBacktest(
 // Trendline V2's outcome determination is deliberately separate from the shared
 // determineOutcome() above — every other bot type exits at a fixed take-profit price set once
 // at entry, but this bot's take-profit is the *opposite* line's live projection, re-checked
-// every forward candle, and its trailing stop is a simple % off that candle's close rather
-// than a fixed level or a slope projection. Mirrors monitor.ts's real tick order: check the
-// resting SL/TP first (as set by the *previous* candle's close), then trail using this
-// candle's own close for the next iteration — never trail-then-check the same candle, which
-// would be look-ahead bias a real resting order could never benefit from.
+// every forward candle. Its stop loss is cTrader's own native trailing stop (see
+// bot/engine.ts's executeSignal — trailingStopLoss: true), which trails maintaining the same
+// absolute distance the initial stop was placed at from price, only ever tightening — modelled
+// here as `stopDist` held constant off each candle's close. Mirrors monitor.ts's real tick
+// order: check the resting SL/TP first (as set by the *previous* candle's close), then trail
+// using this candle's own close for the next iteration — never trail-then-check the same
+// candle, which would be look-ahead bias a real resting order could never benefit from.
 function determineTrendlineV2Outcome(
   trade: {
     pair:          string;
@@ -963,12 +965,12 @@ function determineTrendlineV2Outcome(
     stopLoss:      number;
     oppositeLine:  TrendlineV2Line | null;
     fallbackTakeProfit: number;
-    trailPercent:  number;
   },
   forwardCandles: Candle[],
 ): { outcome: "tp" | "sl" | "expired"; closePrice: number; closeTime: number; pnlPips: number } {
   const { direction, entryPrice } = trade;
   const pf = pipFactor(trade.pair);
+  const stopDist = Math.abs(entryPrice - trade.stopLoss);
   let currentSL = trade.stopLoss;
 
   for (let i = 0; i < Math.min(forwardCandles.length, 200); i++) {
@@ -999,8 +1001,7 @@ function determineTrendlineV2Outcome(
       }
     }
 
-    const pct = trade.trailPercent / 100;
-    const trialSL = direction === "buy" ? c.close * (1 - pct) : c.close * (1 + pct);
+    const trialSL = direction === "buy" ? c.close - stopDist : c.close + stopDist;
     if (direction === "buy"  && trialSL > currentSL) currentSL = trialSL;
     if (direction === "sell" && trialSL < currentSL) currentSL = trialSL;
   }
@@ -1139,7 +1140,7 @@ export async function runTrendlineV2Backtest(
       const lots = calcLots(riskAmount, pair, entry.entryPrice, entry.stopLoss);
       if (lots <= 0) continue;
 
-      const oppositeLine = pickOppositeLine(activeLines, entry.lineType);
+      const oppositeLine = pickOppositeLine(activeLines, entry.lineType, cutoff);
       const stopDist = Math.abs(entry.entryPrice - entry.stopLoss);
       const fallbackTakeProfit = entry.direction === "buy"
         ? entry.entryPrice + stopDist * tunables.fallbackRewardRisk
@@ -1148,7 +1149,7 @@ export async function runTrendlineV2Backtest(
 
       const forwardCandles = candles4H.slice(absIdx + 1);
       const outcomeResult = determineTrendlineV2Outcome(
-        { pair, direction: entry.direction, entryPrice: entry.entryPrice, stopLoss: entry.stopLoss, oppositeLine, fallbackTakeProfit, trailPercent: tunables.trailPercent },
+        { pair, direction: entry.direction, entryPrice: entry.entryPrice, stopLoss: entry.stopLoss, oppositeLine, fallbackTakeProfit },
         forwardCandles,
       );
 

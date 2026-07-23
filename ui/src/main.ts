@@ -2501,19 +2501,16 @@ function buildSettingFields(bot: any): string {
         </div>
       </div>
       <div class="bot-card-row">
-        <span class="bot-card-label">Trailing Stop</span>
-        <div class="bot-card-setting">
-          <input type="number" min="0.1" max="10" step="0.1"
-            value="${bot.settings.trailPercent ?? 1.0}"
-            data-bot-id="${bot.id}" data-key="trailPercent" />
-          <span style="font-size:10px;color:var(--muted)">% off current price (not the trendline)</span>
-        </div>
-        <span class="bot-card-label" style="margin-left:12px">Fallback R:R</span>
+        <span class="bot-card-label">Fallback R:R</span>
         <div class="bot-card-setting">
           <input type="number" min="1" max="10" step="0.5"
             value="${bot.settings.fallbackRewardRisk ?? 2.0}"
             data-bot-id="${bot.id}" data-key="fallbackRewardRisk" />
           <span style="font-size:10px;color:var(--muted)">:1 — only used if no opposite line exists yet</span>
+        </div>
+        <span class="bot-card-label" style="margin-left:12px">Trailing Stop</span>
+        <div class="bot-card-setting">
+          <span style="font-size:10px;color:var(--muted)">cTrader's native trailing stop — trails from the initial SL distance, no separate setting</span>
         </div>
       </div>
     </details>` : ''

@@ -16,8 +16,10 @@
  *   - Take-profit is dynamic: the nearest active line of the opposite type, checked every tick
  *     (see hasCrossedOppositeLine) rather than a fixed price set once at entry. Falls back to a
  *     fixed reward:risk multiple only if no opposite line is known yet.
- *   - The trailing stop for this bot type is a simple percentage off current price (see
- *     bot/monitor.ts), not the original bot's trendline-slope trail.
+ *   - The stop loss uses cTrader's own native trailing stop (placed at order time via the
+ *     trailingStopLoss flag) rather than the original bot's client-side trendline-slope trail —
+ *     the broker trails it server-side, maintaining the same distance the initial stop was set
+ *     at from the retest price.
  *
  * All swing-point/line-construction/candle-confirmation math is reused directly from
  * trendline.ts, not reimplemented.
@@ -40,7 +42,6 @@ export interface TrendlineV2Tunables {
   minStopDistAtr:     number; // minimum allowed stop distance (rejects too-tight setups)
   minTouches:         number; // minimum touches a line needs to be considered
   slBufferAtr:        number; // SL distance beyond the flipped line, in ATR multiples
-  trailPercent:       number; // % trailing stop, applied in monitor.ts once a trade is open
   fallbackRewardRisk: number; // used only if no opposite line exists yet at entry time
 }
 
@@ -52,7 +53,6 @@ export const DEFAULT_TRENDLINE_V2_TUNABLES: TrendlineV2Tunables = {
   minStopDistAtr:     0.2,
   minTouches:         2,
   slBufferAtr:        0.1,
-  trailPercent:       1.0,
   fallbackRewardRisk: 2.0,
 };
 
@@ -116,23 +116,32 @@ export function projectLineAt(line: TrendlineV2Line, timestamp: number): number 
 
 // An active (not-yet-broken) line is, by construction, always on the "correct" side of price —
 // an active resistance line is always currently above price (if it weren't, it would already
-// be broken), an active support line always below. That invariant makes the take-profit
-// crossing condition unambiguous: a short's resistance target is hit once price closes at or
-// below the line's current projection; a long's support target once price closes at or above it.
+// be broken), an active support line always below. Take-profit is a *break* of that opposite
+// line in the trade's own favourable direction: a resistance target (a buy's TP, since a buy
+// enters off broken support) is hit once price closes at or above the line's current
+// projection; a support target (a sell's TP) once price closes at or below it.
 export function hasCrossedOppositeLine(candle: Candle, line: TrendlineV2Line): boolean {
   const proj = projectLineAt(line, candle.timestamp);
-  return line.lineType === "resistance" ? candle.close <= proj : candle.close >= proj;
+  return line.lineType === "resistance" ? candle.close >= proj : candle.close <= proj;
 }
 
 // Picks the current best opposite-type active line to serve as a trade's take-profit
 // reference — the most recently formed line of the opposite type, since that's the most
 // relevant to current price action. Returns null if none exist yet.
+//
+// latestCandleTs excludes any candidate whose second anchor is the current (still-forming or
+// just-closed) candle — a line's second anchor is a confirmed swing point, and a swing point
+// on the very latest candle can't yet be confirmed (there's no future price action to confirm
+// it against). This should already be structurally impossible given swingHighs/swingLows'
+// own lookback requirement, but the TP reference is exactly the place a shaky anchor would be
+// most costly, so it's guarded explicitly here too.
 export function pickOppositeLine(
   activeLines:     TrendlineV2Line[],
   brokenLineType:  "resistance" | "support",
+  latestCandleTs:  number,
 ): TrendlineV2Line | null {
   const oppositeType = brokenLineType === "resistance" ? "support" : "resistance";
-  const candidates = activeLines.filter(l => l.lineType === oppositeType);
+  const candidates = activeLines.filter(l => l.lineType === oppositeType && l.p2Ts < latestCandleTs);
   if (candidates.length === 0) return null;
   return candidates.reduce((best, l) => (l.p2Ts > best.p2Ts ? l : best), candidates[0]!);
 }

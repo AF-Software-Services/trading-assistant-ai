@@ -17,7 +17,7 @@ import { createMarketDataProvider }        from "../providers/factory.ts";
 import { calculateATR }                    from "../engines/trend.ts";
 import { roundPrice }                      from "../engines/trendline.ts";
 import { pipFactor }                       from "../engines/pip-value.ts";
-import { hasCrossedOppositeLine, DEFAULT_TRENDLINE_V2_TUNABLES } from "../engines/trendline-v2.ts";
+import { hasCrossedOppositeLine } from "../engines/trendline-v2.ts";
 import { getLineById }                     from "./trendline-v2-store.ts";
 
 interface Env {
@@ -34,9 +34,6 @@ interface TrailState {
   safetySlope?:        number;
   safetyAnchorPrice?:  number;
   safetyAnchorTimeMs?: number;
-  // Trendline V2 only: a simple % off current price, replacing the slope-projected Safety
-  // Line above for this bot type — set instead of, never alongside, the safety* fields.
-  trailPercent?:       number;
 }
 
 function trailKey(signalId: string): string {
@@ -223,7 +220,9 @@ async function monitorAccountSignals(
         ? position.openPrice - riskDistance
         : position.openPrice + riskDistance, signal.pair);
       try {
-        await trading.amendPosition(posId, newSL, position.takeProfit ?? signal.takeProfit ?? undefined, signal.pair);
+        // Re-request trailing for Trendline V2 too — a repaired SL is a fresh amend, and
+        // without the flag the broker would leave it static instead of resuming the trail.
+        await trading.amendPosition(posId, newSL, position.takeProfit ?? signal.takeProfit ?? undefined, signal.pair, signal.tradeClass === "trendline-v2");
         console.log(`[Monitor] ${signal.pair} ${signal.direction} had no stop loss — applied ${newSL.toFixed(5)} (real entry ${position.openPrice}, intended risk ${riskDistance.toFixed(5)})`);
       } catch (e) {
         console.error(`[Monitor] Failed to repair missing SL for ${signal.id}:`, e);
@@ -261,23 +260,21 @@ async function monitorAccountSignals(
     }
 
     // ── Trail the stop loss ───────────────────────────────────────────────────
+    // Trendline V2 skips this entirely — its SL is placed with cTrader's own native
+    // trailingStopLoss flag (see executeSignal in bot/engine.ts), so the broker trails it
+    // server-side and there's no client-side state to poll or push here.
+    if (signal.tradeClass === "trendline-v2") continue;
+
     try {
       const currentPrice = latestCandle.close;
       const atr          = calculateATR(candles4H);
 
       const savedState   = await env.KV.get(trailKey(signal.id), "json") as TrailState | null;
-      const state: TrailState = savedState ?? (signal.tradeClass === "trendline-v2"
-        ? { currentSL: signal.stopLoss, trailPercent: DEFAULT_TRENDLINE_V2_TUNABLES.trailPercent }
-        : { currentSL: signal.stopLoss });
+      const state: TrailState = savedState ?? { currentSL: signal.stopLoss };
 
       let newSL = state.currentSL;
 
-      if (state.trailPercent !== undefined) {
-        // Trendline V2's trail: a simple % off current price, not the slope-projected Safety
-        // Line — deliberately doesn't reference any trendline, broken or otherwise.
-        const pct = state.trailPercent / 100;
-        newSL = roundPrice(signal.direction === "buy" ? currentPrice * (1 - pct) : currentPrice * (1 + pct), signal.pair);
-      } else if (state.safetySlope !== undefined && state.safetyAnchorPrice !== undefined && state.safetyAnchorTimeMs !== undefined) {
+      if (state.safetySlope !== undefined && state.safetyAnchorPrice !== undefined && state.safetyAnchorTimeMs !== undefined) {
         const barsElapsed = (Date.now() - state.safetyAnchorTimeMs) / FOUR_HOURS_MS;
         newSL = roundPrice(state.safetyAnchorPrice + state.safetySlope * barsElapsed, signal.pair);
       }
@@ -317,19 +314,5 @@ export async function storeTrendlineTrailState(
     safetyAnchorPrice:   safetyLine.p1Price,
     safetyAnchorTimeMs:  entryTimeMs,
   };
-  await kv.put(trailKey(signalId), JSON.stringify(state), { expirationTtl: 7 * 24 * 3600 });
-}
-
-/**
- * Called from the bot engine when a Trendline V2 signal is first executed.
- * Stores the % trail instead of a Safety Line — see TrailState.trailPercent.
- */
-export async function storeTrendlineV2TrailState(
-  kv:          KVNamespace,
-  signalId:    string,
-  trailPercent: number,
-  initialSL:   number,
-): Promise<void> {
-  const state: TrailState = { currentSL: initialSL, trailPercent };
   await kv.put(trailKey(signalId), JSON.stringify(state), { expirationTtl: 7 * 24 * 3600 });
 }
