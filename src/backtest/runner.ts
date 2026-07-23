@@ -167,15 +167,21 @@ function determineOutcome(
       if (direction === "sell" && currentSL > trade.stopLoss) currentSL = trade.stopLoss;
     }
 
+    // Both SL and TP are resting orders on a real broker — either one fires the instant price
+    // touches it intrabar, not only if the candle closes past it. Checking SL against c.close
+    // while checking TP against the intrabar high/low (as this used to) meant a candle that
+    // wicked through the stop and recovered by close was never counted as a loss here, letting
+    // the backtest ride a trade through to a later win that a real live stop would already have
+    // closed out — a systematic, one-sided inflation of every backtested win rate.
     if (direction === "buy") {
-      if (c.close <= currentSL) {
+      if (c.low <= currentSL) {
         return { outcome: "sl", closePrice: currentSL, closeTime: c.timestamp, pnlPips: (currentSL - entryPrice) * pf };
       }
       if (c.high >= takeProfit) {
         return { outcome: "tp", closePrice: takeProfit, closeTime: c.timestamp, pnlPips: (takeProfit - entryPrice) * pf };
       }
     } else {
-      if (c.close >= currentSL) {
+      if (c.high >= currentSL) {
         return { outcome: "sl", closePrice: currentSL, closeTime: c.timestamp, pnlPips: (entryPrice - currentSL) * pf };
       }
       if (c.low <= takeProfit) {
