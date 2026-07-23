@@ -275,6 +275,22 @@ async function buildBotContext(
       openPositionsForExposure = positions.map(p => ({
         pair: p.symbol, direction: p.direction, lots: p.lots, price: p.currentPrice ?? p.openPrice,
       }));
+
+      // A limit order can sit pending for hours before it fills — openPositionPairs above only
+      // reflects positions that have actually filled, so a still-pending order on a pair didn't
+      // stop this bot from placing a second order on the same pair next scan. If both eventually
+      // filled, that's real duplicate exposure, not just a tracking gap (separate from the
+      // cancel/fill race fix, which only stops us losing track of a fill — it doesn't stop a
+      // second entry being placed while the first is still outstanding). Treat any of this
+      // bot's own not-yet-filled, not-yet-expired orders as occupying their pair too.
+      const openPositionIds = new Set(positions.map(p => p.positionId));
+      const pendingSignals  = await getBotSignals(env.DB, { status: "executed", botId, limit: 50 });
+      const now = Date.now();
+      for (const s of pendingSignals) {
+        if (s.ctraderPositionId !== null && !openPositionIds.has(s.ctraderPositionId) && s.outcome === null && s.expiresAt > now) {
+          openPositionPairs.add(s.pair);
+        }
+      }
     } catch (e) {
       if (mode === "autonomous") {
         result.errors.push(`cTrader unavailable: ${(e as Error).message}`);
