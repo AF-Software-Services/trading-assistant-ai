@@ -1539,6 +1539,11 @@ html, body {
   color: #38bdf8;
 }
 
+.bot-type-badge.trendline-v2 {
+  background: rgba(236,72,153,0.12);
+  color: #ec4899;
+}
+
 /* ── Account rows ────────────────────────────────────────────────────────────── */
 .account-row {
   display: flex;

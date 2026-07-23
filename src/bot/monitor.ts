@@ -17,6 +17,8 @@ import { createMarketDataProvider }        from "../providers/factory.ts";
 import { calculateATR }                    from "../engines/trend.ts";
 import { roundPrice }                      from "../engines/trendline.ts";
 import { pipFactor }                       from "../engines/pip-value.ts";
+import { hasCrossedOppositeLine, DEFAULT_TRENDLINE_V2_TUNABLES } from "../engines/trendline-v2.ts";
+import { getLineById }                     from "./trendline-v2-store.ts";
 
 interface Env {
   DB: D1Database;
@@ -32,6 +34,9 @@ interface TrailState {
   safetySlope?:        number;
   safetyAnchorPrice?:  number;
   safetyAnchorTimeMs?: number;
+  // Trendline V2 only: a simple % off current price, replacing the slope-projected Safety
+  // Line above for this bot type — set instead of, never alongside, the safety* fields.
+  trailPercent?:       number;
 }
 
 function trailKey(signalId: string): string {
@@ -225,21 +230,54 @@ async function monitorAccountSignals(
       }
     }
 
+    // ── Fetch recent candles once, shared by the opposite-line TP check and trailing below ──
+    let candles4H;
+    try {
+      candles4H = await provider.getCandles(signal.pair, "4H", 50);
+    } catch (e) {
+      console.error(`[Monitor] Candle fetch failed for ${signal.id}:`, e);
+      continue;
+    }
+    if (candles4H.length < 5) continue;
+    const latestCandle = candles4H[candles4H.length - 1]!;
+
+    // ── Trendline V2: opposite-line take-profit ───────────────────────────────
+    // Checked every tick against the *current* projection of the opposite line (not a price
+    // fixed once at entry) — a strong move can run further than a static target would allow.
+    // The existing trendline bot's own trades never set oppositeLineId, so this is a no-op
+    // for them.
+    if (signal.tradeClass === "trendline-v2" && signal.oppositeLineId) {
+      try {
+        const oppositeLine = await getLineById(env.DB, signal.oppositeLineId);
+        if (oppositeLine && hasCrossedOppositeLine(latestCandle, oppositeLine)) {
+          await trading.closePosition(posId);
+          console.log(`[Monitor] ${signal.pair} ${signal.direction}: closed at opposite line (${oppositeLine.lineType}, id ${oppositeLine.id}) take-profit`);
+          await env.KV.delete(trailKey(signal.id));
+          continue; // next tick's closed-position handling above records the actual outcome
+        }
+      } catch (e) {
+        console.error(`[Monitor] Opposite-line TP check failed for ${signal.id}:`, e);
+      }
+    }
+
     // ── Trail the stop loss ───────────────────────────────────────────────────
     try {
-      const candles4H    = await provider.getCandles(signal.pair, "4H", 50);
-      if (candles4H.length < 5) continue;
-
-      const latestCandle = candles4H[candles4H.length - 1]!;
       const currentPrice = latestCandle.close;
       const atr          = calculateATR(candles4H);
 
       const savedState   = await env.KV.get(trailKey(signal.id), "json") as TrailState | null;
-      const state: TrailState = savedState ?? { currentSL: signal.stopLoss };
+      const state: TrailState = savedState ?? (signal.tradeClass === "trendline-v2"
+        ? { currentSL: signal.stopLoss, trailPercent: DEFAULT_TRENDLINE_V2_TUNABLES.trailPercent }
+        : { currentSL: signal.stopLoss });
 
       let newSL = state.currentSL;
 
-      if (state.safetySlope !== undefined && state.safetyAnchorPrice !== undefined && state.safetyAnchorTimeMs !== undefined) {
+      if (state.trailPercent !== undefined) {
+        // Trendline V2's trail: a simple % off current price, not the slope-projected Safety
+        // Line — deliberately doesn't reference any trendline, broken or otherwise.
+        const pct = state.trailPercent / 100;
+        newSL = roundPrice(signal.direction === "buy" ? currentPrice * (1 - pct) : currentPrice * (1 + pct), signal.pair);
+      } else if (state.safetySlope !== undefined && state.safetyAnchorPrice !== undefined && state.safetyAnchorTimeMs !== undefined) {
         const barsElapsed = (Date.now() - state.safetyAnchorTimeMs) / FOUR_HOURS_MS;
         newSL = roundPrice(state.safetyAnchorPrice + state.safetySlope * barsElapsed, signal.pair);
       }
@@ -279,5 +317,19 @@ export async function storeTrendlineTrailState(
     safetyAnchorPrice:   safetyLine.p1Price,
     safetyAnchorTimeMs:  entryTimeMs,
   };
+  await kv.put(trailKey(signalId), JSON.stringify(state), { expirationTtl: 7 * 24 * 3600 });
+}
+
+/**
+ * Called from the bot engine when a Trendline V2 signal is first executed.
+ * Stores the % trail instead of a Safety Line — see TrailState.trailPercent.
+ */
+export async function storeTrendlineV2TrailState(
+  kv:          KVNamespace,
+  signalId:    string,
+  trailPercent: number,
+  initialSL:   number,
+): Promise<void> {
+  const state: TrailState = { currentSL: initialSL, trailPercent };
   await kv.put(trailKey(signalId), JSON.stringify(state), { expirationTtl: 7 * 24 * 3600 });
 }
