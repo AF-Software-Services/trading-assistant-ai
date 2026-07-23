@@ -102,7 +102,7 @@ export function pickTrendlineTunables(settings: Record<string, unknown>): Partia
 
 // ── Swing points ──────────────────────────────────────────────────────────────
 
-function swingHighs(candles: Candle[], lookback = 5): number[] {
+export function swingHighs(candles: Candle[], lookback = 5): number[] {
   const out: number[] = [];
   for (let i = lookback; i < candles.length - lookback; i++) {
     const hi = candles[i]!.high;
@@ -115,7 +115,7 @@ function swingHighs(candles: Candle[], lookback = 5): number[] {
   return out;
 }
 
-function swingLows(candles: Candle[], lookback = 5): number[] {
+export function swingLows(candles: Candle[], lookback = 5): number[] {
   const out: number[] = [];
   for (let i = lookback; i < candles.length - lookback; i++) {
     const lo = candles[i]!.low;
@@ -128,7 +128,7 @@ function swingLows(candles: Candle[], lookback = 5): number[] {
   return out;
 }
 
-function projectPrice(line: DetectedLine, index: number): number {
+export function projectPrice(line: DetectedLine, index: number): number {
   return line.p1Price + line.slope * (index - line.p1Index);
 }
 
@@ -138,7 +138,7 @@ function projectPrice(line: DetectedLine, index: number): number {
  * Bullish engulfing: current candle is green AND its body fully engulfs the previous candle's body.
  * Also accepts a hammer (long lower wick, small body near top) as confirmation.
  */
-function isBullishEngulfing(candles: Candle[], index: number): boolean {
+export function isBullishEngulfing(candles: Candle[], index: number): boolean {
   if (index < 1) return false;
   const curr = candles[index]!;
   const prev = candles[index - 1]!;
@@ -167,7 +167,7 @@ function isBullishEngulfing(candles: Candle[], index: number): boolean {
  * Bearish engulfing: current candle is red AND its body fully engulfs the previous candle's body.
  * Also accepts a shooting star (long upper wick, small body near bottom).
  */
-function isBearishEngulfing(candles: Candle[], index: number): boolean {
+export function isBearishEngulfing(candles: Candle[], index: number): boolean {
   if (index < 1) return false;
   const curr = candles[index]!;
   const prev = candles[index - 1]!;
@@ -223,7 +223,7 @@ export function getTradingSession(hourUtc: number): TradingSession {
 
 // ── Build trendlines ──────────────────────────────────────────────────────────
 
-function buildLines(
+export function buildLines(
   candles:   Candle[],
   swings:    number[],
   type:      "resistance" | "support",

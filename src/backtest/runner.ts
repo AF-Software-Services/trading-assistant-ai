@@ -10,6 +10,10 @@ import { detectFibonacciSignal } from "../engines/fibonacci-signal.ts";
 import type { FibonacciTunables } from "../engines/fibonacci-signal.ts";
 import { detectSessionBreakoutSignal } from "../engines/session-breakout.ts";
 import type { SessionBreakoutTunables } from "../engines/session-breakout.ts";
+import { discoverLines, scanTrendlineV2, pickOppositeLine, projectLineAt, hasCrossedOppositeLine, DEFAULT_TRENDLINE_V2_TUNABLES } from "../engines/trendline-v2.ts";
+import type { TrendlineV2Tunables } from "../engines/trendline-v2.ts";
+import type { TrendlineV2Line } from "../bot/trendline-v2-store.ts";
+import { getDailyBias, roundPrice } from "../engines/trendline.ts";
 import type { TradingService } from "../trading/service.ts";
 import { pipFactor, PIP_VALUE_GBP } from "../engines/pip-value.ts";
 
@@ -70,6 +74,18 @@ export interface SessionBreakoutBacktestConfig {
   maxOpenPositions:    number;
   allowDuplicatePairs: boolean;
   tunables:             Partial<SessionBreakoutTunables>;
+}
+
+export interface TrendlineV2BacktestConfig {
+  pairs: string[];
+  fromMs: number;
+  toMs: number;
+  accountBalance: number;
+  riskPercent: number;
+  minScore: number;
+  maxOpenPositions:    number;
+  allowDuplicatePairs: boolean;
+  tunables:             Partial<TrendlineV2Tunables>;
 }
 
 // ProtoOATrendbarPeriod values for the timeframes the backtester/prefetch route need.
@@ -414,6 +430,7 @@ export async function runTrendlineBacktest(
         lineP2Ts,
         zoneLow: null,
         zoneHigh: null,
+        oppositeLineId: null,
       };
 
       allSignals.push(signal);
@@ -597,6 +614,7 @@ export async function runStructureBacktest(
         lineP2Ts:         null,
         zoneLow:          sig.zoneLow,
         zoneHigh:         sig.zoneHigh,
+        oppositeLineId:   null,
       };
 
       allSignals.push(signal);
@@ -758,6 +776,7 @@ export async function runFibonacciBacktest(
         lineP2Ts:         null,
         zoneLow:          sig.legOriginPrice,
         zoneHigh:         sig.legExtremePrice,
+        oppositeLineId:   null,
       };
 
       allSignals.push(signal);
@@ -915,6 +934,7 @@ export async function runSessionBreakoutBacktest(
         lineP2Ts:         null,
         zoneLow:          sig.sessionLow,
         zoneHigh:         sig.sessionHigh,
+        oppositeLineId:   null,
       };
 
       allSignals.push(signal);
@@ -922,6 +942,274 @@ export async function runSessionBreakoutBacktest(
 
     const pairCount = allSignals.filter(s => s.pair === pair).length;
     progress(`${pair}: ${pairCount} session breakout signals`);
+  }
+
+  return { signals: allSignals, diagnostics: rejections, log };
+}
+
+// Trendline V2's outcome determination is deliberately separate from the shared
+// determineOutcome() above — every other bot type exits at a fixed take-profit price set once
+// at entry, but this bot's take-profit is the *opposite* line's live projection, re-checked
+// every forward candle. Its stop loss is cTrader's own native trailing stop (see
+// bot/engine.ts's executeSignal — trailingStopLoss: true), which trails maintaining the same
+// absolute distance the initial stop was placed at from price, only ever tightening — modelled
+// here as `stopDist` held constant off each candle's close. Mirrors monitor.ts's real tick
+// order: check the resting SL/TP first (as set by the *previous* candle's close), then trail
+// using this candle's own close for the next iteration — never trail-then-check the same
+// candle, which would be look-ahead bias a real resting order could never benefit from.
+function determineTrendlineV2Outcome(
+  trade: {
+    pair:          string;
+    direction:     "buy" | "sell";
+    entryPrice:    number;
+    stopLoss:      number;
+    oppositeLine:  TrendlineV2Line | null;
+    fallbackTakeProfit: number;
+  },
+  forwardCandles: Candle[],
+): { outcome: "tp" | "sl" | "expired"; closePrice: number; closeTime: number; pnlPips: number } {
+  const { direction, entryPrice } = trade;
+  const pf = pipFactor(trade.pair);
+  const stopDist = Math.abs(entryPrice - trade.stopLoss);
+  let currentSL = trade.stopLoss;
+
+  for (let i = 0; i < Math.min(forwardCandles.length, 200); i++) {
+    const c = forwardCandles[i]!;
+
+    if (direction === "buy") {
+      if (c.low <= currentSL) {
+        return { outcome: "sl", closePrice: currentSL, closeTime: c.timestamp, pnlPips: (currentSL - entryPrice) * pf };
+      }
+    } else {
+      if (c.high >= currentSL) {
+        return { outcome: "sl", closePrice: currentSL, closeTime: c.timestamp, pnlPips: (entryPrice - currentSL) * pf };
+      }
+    }
+
+    if (trade.oppositeLine) {
+      if (hasCrossedOppositeLine(c, trade.oppositeLine)) {
+        const pnlPips = direction === "buy" ? (c.close - entryPrice) * pf : (entryPrice - c.close) * pf;
+        return { outcome: "tp", closePrice: c.close, closeTime: c.timestamp, pnlPips };
+      }
+    } else {
+      const tp = trade.fallbackTakeProfit;
+      if (direction === "buy" && c.high >= tp) {
+        return { outcome: "tp", closePrice: tp, closeTime: c.timestamp, pnlPips: (tp - entryPrice) * pf };
+      }
+      if (direction === "sell" && c.low <= tp) {
+        return { outcome: "tp", closePrice: tp, closeTime: c.timestamp, pnlPips: (entryPrice - tp) * pf };
+      }
+    }
+
+    const trialSL = direction === "buy" ? c.close - stopDist : c.close + stopDist;
+    if (direction === "buy"  && trialSL > currentSL) currentSL = trialSL;
+    if (direction === "sell" && trialSL < currentSL) currentSL = trialSL;
+  }
+
+  const last = forwardCandles[Math.min(199, forwardCandles.length - 1)];
+  const lastPrice = last?.close ?? entryPrice;
+  const expiredPips = direction === "buy" ? (lastPrice - entryPrice) * pf : (entryPrice - lastPrice) * pf;
+  return { outcome: "expired", closePrice: lastPrice, closeTime: last?.timestamp ?? 0, pnlPips: expiredPips };
+}
+
+export async function runTrendlineV2Backtest(
+  config: TrendlineV2BacktestConfig,
+  trading: TradingService,
+  onProgress?: (msg: string) => void,
+  kv?: KVNamespace,
+): Promise<BacktestResult> {
+  const allSignals: BotSignal[] = [];
+  const rejections: Record<string, number> = {};
+  const log: string[] = [];
+  const progress = (msg: string) => { log.push(msg); onProgress?.(msg); };
+
+  const tunables: TrendlineV2Tunables = { ...DEFAULT_TRENDLINE_V2_TUNABLES, ...config.tunables };
+
+  // Shared across all pairs — mirrors runBotScan's live constraints exactly.
+  const openPositions: Array<{ pair: string; closeTime: number }> = [];
+
+  progress(`Fetching data for ${config.pairs.length} pairs…`);
+  const fetchResults = await Promise.all(config.pairs.map(async (pair) => {
+    try {
+      const [r4H, rD] = await Promise.all([
+        fetchCandles(pair, "4H", config.toMs, trading, kv),
+        fetchCandles(pair, "D",  config.toMs, trading, kv),
+      ]);
+      return { pair, candles4H: r4H.candles, candlesD: rD.candles, error: null as string | null };
+    } catch (err) {
+      return { pair, candles4H: [] as Candle[], candlesD: [] as Candle[], error: (err as Error).message };
+    }
+  }));
+
+  for (const { pair, candles4H, candlesD, error } of fetchResults) {
+    if (error) {
+      progress(`Error fetching ${pair}: ${error}`);
+      continue;
+    }
+
+    progress(`${pair}: 4H=${candles4H.length} D=${candlesD.length} candles`);
+
+    const riskAmount = config.accountBalance * (config.riskPercent / 100);
+    const pipVal     = PIP_VALUE_GBP[pair] ?? 7.50;
+    const MIN_LOOKBACK = 80;
+
+    let periodStart = candles4H.findIndex(c => c.timestamp >= config.fromMs);
+    if (periodStart === -1) { progress(`${pair}: no candles in test period`); continue; }
+    let periodEnd = candles4H.length;
+    for (let k = periodStart; k < candles4H.length; k++) {
+      if (candles4H[k]!.timestamp > config.toMs) { periodEnd = k; break; }
+    }
+    const inPeriodCount = periodEnd - periodStart;
+    progress(`${pair}: ${inPeriodCount} 4H candles in test period`);
+
+    // This pair's persisted line-lifecycle state, simulated in-memory for the duration of this
+    // pair's backtest — the real bot persists the equivalent in trendline_v2_lines via D1.
+    let activeLines: TrendlineV2Line[] = [];
+    let lineSeq = 0;
+
+    for (let i = 0; i < inPeriodCount; i++) {
+      if (i % 20 === 0 && i > 0) await new Promise(r => setTimeout(r, 0));
+
+      const absIdx = periodStart + i;
+      const histStart = Math.max(0, absIdx - 199);
+      const history = candles4H.slice(histStart, absIdx + 1);
+      const cutoff = candles4H[absIdx]!.timestamp;
+
+      let dEnd = candlesD.length;
+      for (let k = candlesD.length - 1; k >= 0; k--) {
+        if (candlesD[k]!.timestamp <= cutoff) { dEnd = k + 1; break; }
+      }
+      const dHistory = candlesD.slice(Math.max(0, dEnd - 30), dEnd);
+
+      if (history.length < MIN_LOOKBACK) {
+        rejections["insufficient_data"] = (rejections["insufficient_data"] ?? 0) + 1;
+        continue;
+      }
+
+      for (let j = openPositions.length - 1; j >= 0; j--) {
+        if (openPositions[j]!.closeTime <= cutoff) openPositions.splice(j, 1);
+      }
+      const pairHasOpenTrade = openPositions.some(p => p.pair === pair);
+
+      const atr = calculateATR(history);
+      const dailyBias = getDailyBias(dHistory);
+
+      // No new discovery while a trade from this bot is already open on this pair — only ever
+      // check the already-known active lines, exactly mirroring the live engine's rule.
+      if (activeLines.length === 0 && !pairHasOpenTrade) {
+        const discovered = discoverLines(history, atr, tunables);
+        activeLines = discovered.map(d => ({
+          id: `${pair}-${d.lineType}-${d.p1Ts}-${lineSeq++}`,
+          botId: "backtest",
+          pair: pair as CurrencyPair,
+          lineType: d.lineType,
+          p1Ts: d.p1Ts, p2Ts: d.p2Ts,
+          p1Price: d.p1Price, p2Price: d.p2Price,
+          slope: d.slope, touches: d.touches,
+          discoveredAt: cutoff, retiredAt: null, createdAt: cutoff,
+        }));
+      }
+      if (activeLines.length === 0) {
+        rejections["no_lines"] = (rejections["no_lines"] ?? 0) + 1;
+        continue;
+      }
+
+      const scanResult = scanTrendlineV2(history, activeLines, atr, tunables, dailyBias);
+      const brokenLines = activeLines.filter(l => scanResult.brokenLineIds.includes(l.id));
+      activeLines = activeLines.filter(l => !scanResult.brokenLineIds.includes(l.id));
+
+      if (!scanResult.entry) {
+        rejections["no_signal"] = (rejections["no_signal"] ?? 0) + 1;
+        continue;
+      }
+      const entry = scanResult.entry;
+
+      if (entry.score < config.minScore) {
+        rejections["low_score"] = (rejections["low_score"] ?? 0) + 1;
+        continue;
+      }
+      if (!config.allowDuplicatePairs && pairHasOpenTrade) {
+        rejections["position_open"] = (rejections["position_open"] ?? 0) + 1;
+        continue;
+      }
+      if (openPositions.length >= config.maxOpenPositions) {
+        rejections["max_positions"] = (rejections["max_positions"] ?? 0) + 1;
+        continue;
+      }
+
+      const lots = calcLots(riskAmount, pair, entry.entryPrice, entry.stopLoss);
+      if (lots <= 0) continue;
+
+      const oppositeLine = pickOppositeLine(activeLines, entry.lineType, cutoff);
+      const stopDist = Math.abs(entry.entryPrice - entry.stopLoss);
+      const fallbackTakeProfit = entry.direction === "buy"
+        ? entry.entryPrice + stopDist * tunables.fallbackRewardRisk
+        : entry.entryPrice - stopDist * tunables.fallbackRewardRisk;
+      const takeProfitForRecord = oppositeLine ? projectLineAt(oppositeLine, cutoff) : fallbackTakeProfit;
+
+      const forwardCandles = candles4H.slice(absIdx + 1);
+      const outcomeResult = determineTrendlineV2Outcome(
+        { pair, direction: entry.direction, entryPrice: entry.entryPrice, stopLoss: entry.stopLoss, oppositeLine, fallbackTakeProfit },
+        forwardCandles,
+      );
+
+      openPositions.push({ pair, closeTime: outcomeResult.closeTime });
+      const pnlGbp = outcomeResult.pnlPips * lots * pipVal;
+      const brokenLine = brokenLines.find(l => l.id === entry.lineId);
+
+      const signal: BotSignal = {
+        id:               crypto.randomUUID(),
+        botId:            "backtest-trendline-v2",
+        pair:             pair as CurrencyPair,
+        direction:        entry.direction,
+        entryPrice:       entry.entryPrice,
+        stopLoss:         entry.stopLoss,
+        takeProfit:       roundPrice(takeProfitForRecord, pair),
+        lots,
+        score:            entry.score,
+        recommendationId: null,
+        reasons:          entry.reasons,
+        status:           "executed",
+        createdAt:        cutoff,
+        expiresAt:        cutoff + 4 * 60 * 60 * 1000,
+        executedAt:       cutoff,
+        ctraderPositionId: null,
+        journalId:        null,
+        rejectionReason:  null,
+        errorMessage:     null,
+        source:           "backtest",
+        backtestRunId:    null, // set by routes.ts
+        signalType:       "trendline_v2_break_retest",
+        signalTimeframe:  "4H",
+        signalConfidence: entry.score,
+        trend:            entry.direction === "buy" ? "bullish" : "bearish",
+        structure:        null,
+        mtfBias:          null,
+        mtfLabel:         null,
+        atr:              null,
+        inAoi:            false,
+        fibLabel:         null,
+        tradeClass:       "trendline-v2",
+        zoneType:         null,
+        patternType:      null,
+        outcome:          outcomeResult.outcome,
+        closePrice:       +outcomeResult.closePrice.toFixed(5),
+        closeTime:        outcomeResult.closeTime,
+        pnlPips:          +outcomeResult.pnlPips.toFixed(1),
+        pnlGbp:           +pnlGbp.toFixed(2),
+        lineType:         entry.lineType,
+        lineP1Ts:         brokenLine?.p1Ts ?? null,
+        lineP2Ts:         brokenLine?.p2Ts ?? null,
+        zoneLow:          null,
+        zoneHigh:         null,
+        oppositeLineId:   oppositeLine?.id ?? null,
+      };
+
+      allSignals.push(signal);
+    }
+
+    const pairCount = allSignals.filter(s => s.pair === pair).length;
+    progress(`${pair}: ${pairCount} trendline-v2 signals`);
   }
 
   return { signals: allSignals, diagnostics: rejections, log };

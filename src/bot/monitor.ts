@@ -17,6 +17,8 @@ import { createMarketDataProvider }        from "../providers/factory.ts";
 import { calculateATR }                    from "../engines/trend.ts";
 import { roundPrice }                      from "../engines/trendline.ts";
 import { pipFactor }                       from "../engines/pip-value.ts";
+import { hasCrossedOppositeLine } from "../engines/trendline-v2.ts";
+import { getLineById }                     from "./trendline-v2-store.ts";
 
 interface Env {
   DB: D1Database;
@@ -218,19 +220,52 @@ async function monitorAccountSignals(
         ? position.openPrice - riskDistance
         : position.openPrice + riskDistance, signal.pair);
       try {
-        await trading.amendPosition(posId, newSL, position.takeProfit ?? signal.takeProfit ?? undefined, signal.pair);
+        // Re-request trailing for Trendline V2 too — a repaired SL is a fresh amend, and
+        // without the flag the broker would leave it static instead of resuming the trail.
+        await trading.amendPosition(posId, newSL, position.takeProfit ?? signal.takeProfit ?? undefined, signal.pair, signal.tradeClass === "trendline-v2");
         console.log(`[Monitor] ${signal.pair} ${signal.direction} had no stop loss — applied ${newSL.toFixed(5)} (real entry ${position.openPrice}, intended risk ${riskDistance.toFixed(5)})`);
       } catch (e) {
         console.error(`[Monitor] Failed to repair missing SL for ${signal.id}:`, e);
       }
     }
 
-    // ── Trail the stop loss ───────────────────────────────────────────────────
+    // ── Fetch recent candles once, shared by the opposite-line TP check and trailing below ──
+    let candles4H;
     try {
-      const candles4H    = await provider.getCandles(signal.pair, "4H", 50);
-      if (candles4H.length < 5) continue;
+      candles4H = await provider.getCandles(signal.pair, "4H", 50);
+    } catch (e) {
+      console.error(`[Monitor] Candle fetch failed for ${signal.id}:`, e);
+      continue;
+    }
+    if (candles4H.length < 5) continue;
+    const latestCandle = candles4H[candles4H.length - 1]!;
 
-      const latestCandle = candles4H[candles4H.length - 1]!;
+    // ── Trendline V2: opposite-line take-profit ───────────────────────────────
+    // Checked every tick against the *current* projection of the opposite line (not a price
+    // fixed once at entry) — a strong move can run further than a static target would allow.
+    // The existing trendline bot's own trades never set oppositeLineId, so this is a no-op
+    // for them.
+    if (signal.tradeClass === "trendline-v2" && signal.oppositeLineId) {
+      try {
+        const oppositeLine = await getLineById(env.DB, signal.oppositeLineId);
+        if (oppositeLine && hasCrossedOppositeLine(latestCandle, oppositeLine)) {
+          await trading.closePosition(posId);
+          console.log(`[Monitor] ${signal.pair} ${signal.direction}: closed at opposite line (${oppositeLine.lineType}, id ${oppositeLine.id}) take-profit`);
+          await env.KV.delete(trailKey(signal.id));
+          continue; // next tick's closed-position handling above records the actual outcome
+        }
+      } catch (e) {
+        console.error(`[Monitor] Opposite-line TP check failed for ${signal.id}:`, e);
+      }
+    }
+
+    // ── Trail the stop loss ───────────────────────────────────────────────────
+    // Trendline V2 skips this entirely — its SL is placed with cTrader's own native
+    // trailingStopLoss flag (see executeSignal in bot/engine.ts), so the broker trails it
+    // server-side and there's no client-side state to poll or push here.
+    if (signal.tradeClass === "trendline-v2") continue;
+
+    try {
       const currentPrice = latestCandle.close;
       const atr          = calculateATR(candles4H);
 

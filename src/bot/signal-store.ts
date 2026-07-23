@@ -61,6 +61,10 @@ export interface BotSignal {
   // rather than adding near-identical columns a second time). Null for trendline signals.
   zoneLow:            number | null;
   zoneHigh:           number | null;
+  // Trendline V2 only: the trendline_v2_lines.id of the opposite-type active line serving as
+  // this signal's dynamic take-profit reference. Null for every other signal type, and null
+  // for a trendline-v2 signal if no opposite line was known yet at entry (fixed-R:R fallback).
+  oppositeLineId:     string | null;
 }
 
 // ── KV helpers ────────────────────────────────────────────────────────────────
@@ -98,14 +102,14 @@ export async function saveBotSignal(db: D1Database, signal: BotSignal): Promise<
         trend, structure, mtf_bias, mtf_label, atr, in_aoi,
         fib_label, trade_class, zone_type, pattern_type,
         outcome, close_price, close_time, pnl_pips, pnl_gbp,
-        line_type, line_p1_ts, line_p2_ts, zone_low, zone_high)
+        line_type, line_p1_ts, line_p2_ts, zone_low, zone_high, opposite_line_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
              ?, ?,
              ?, ?, ?,
              ?, ?, ?, ?, ?, ?,
              ?, ?, ?, ?,
              ?, ?, ?, ?, ?,
-             ?, ?, ?, ?, ?)
+             ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        status               = excluded.status,
        executed_at          = excluded.executed_at,
@@ -156,6 +160,7 @@ export async function saveBotSignal(db: D1Database, signal: BotSignal): Promise<
     signal.lineP2Ts ?? null,
     signal.zoneLow ?? null,
     signal.zoneHigh ?? null,
+    signal.oppositeLineId ?? null,
   ).run();
 }
 
@@ -324,5 +329,6 @@ function rowToSignal(row: Record<string, unknown>): BotSignal {
     lineP2Ts:          (row["line_p2_ts"]          as number | null) ?? null,
     zoneLow:           (row["zone_low"]            as number | null) ?? null,
     zoneHigh:          (row["zone_high"]           as number | null) ?? null,
+    oppositeLineId:    (row["opposite_line_id"]    as string | null) ?? null,
   };
 }

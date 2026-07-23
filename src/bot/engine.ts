@@ -3,14 +3,17 @@ import type { BotInstance }                from "./bot-types.ts";
 import { createMarketDataProvider }        from "../providers/factory.ts";
 import type { MarketDataProvider }         from "../providers/interface.ts";
 import { pipFactor, PIP_VALUE_GBP }        from "../engines/pip-value.ts";
-import { detectTrendlineSignal, pickTrendlineTunables, getTradingSession } from "../engines/trendline.ts";
+import { detectTrendlineSignal, pickTrendlineTunables, getTradingSession, getDailyBias, roundPrice } from "../engines/trendline.ts";
 import type { TradingSession }             from "../engines/trendline.ts";
 import { detectStructureSignal, pickStructureTunables } from "../engines/structure-signal.ts";
 import { detectFibonacciSignal, pickFibonacciTunables } from "../engines/fibonacci-signal.ts";
 import { detectSessionBreakoutSignal, pickSessionBreakoutTunables } from "../engines/session-breakout.ts";
+import { discoverLines, scanTrendlineV2, pickOppositeLine, projectLineAt, pickTrendlineV2Tunables, DEFAULT_TRENDLINE_V2_TUNABLES } from "../engines/trendline-v2.ts";
+import { getActiveLines, saveDiscoveredLine, retireLine } from "./trendline-v2-store.ts";
+import { calculateATR } from "../engines/trend.ts";
 import { DxyFilter, estimateNotionalGBP } from "../engines/dxy-filter.ts";
 import type { DxyFilterConfig, OpenPositionForExposure } from "../engines/dxy-filter.ts";
-import { storeTrendlineTrailState }        from "./monitor.ts";
+import { storeTrendlineTrailState } from "./monitor.ts";
 import { TradingService }                  from "../trading/service.ts";
 import { getAccount, updateAccountBalance, getPrimaryAccountBalance } from "../ctrader/account-types.ts";
 import { createJournalEntry, buildFeaturesFromContext } from "../storage/journal.ts";
@@ -74,6 +77,7 @@ export async function executeSignal(
   kv:      KVNamespace,
   trading: TradingService,
   orderType: "market" | "limit" = "limit",
+  trailingStopLoss = false,
 ): Promise<void> {
   const { orderId } = await trading.placeOrder({
     pair:       signal.pair,
@@ -82,6 +86,7 @@ export async function executeSignal(
     ...(orderType === "limit" ? { limitPrice: signal.entryPrice } : {}),
     stopLoss:   signal.stopLoss,
     takeProfit: signal.takeProfit,
+    trailingStopLoss,
   });
 
   const features = buildFeaturesFromContext({
@@ -400,7 +405,7 @@ async function scanPairForBot(
           lineType: tlNoBias.actionLine.type,
           lineP1Ts: candles4H[tlNoBias.actionLine.p1Index]!.timestamp,
           lineP2Ts: candles4H[tlNoBias.actionLine.p2Index]!.timestamp,
-          zoneLow: null, zoneHigh: null,
+          zoneLow: null, zoneHigh: null, oppositeLineId: null,
         });
       }
       return;
@@ -478,6 +483,7 @@ async function scanPairForBot(
       lineP2Ts,
       zoneLow: null,
       zoneHigh: null,
+      oppositeLineId: null,
     };
 
     if (mode === "approval") {
@@ -566,6 +572,7 @@ async function scanPairForBot(
       lineP2Ts:         null,
       zoneLow:          stSig.zoneLow,
       zoneHigh:         stSig.zoneHigh,
+      oppositeLineId:   null,
     };
 
     if (mode === "approval") {
@@ -671,6 +678,7 @@ async function scanPairForBot(
       lineP2Ts:         null,
       zoneLow:          fibSig.legOriginPrice,
       zoneHigh:         fibSig.legExtremePrice,
+      oppositeLineId:   null,
     };
 
     if (mode === "approval") {
@@ -752,6 +760,7 @@ async function scanPairForBot(
       lineP2Ts:         null,
       zoneLow:          sbSig.sessionLow,
       zoneHigh:         sbSig.sessionHigh,
+      oppositeLineId:   null,
     };
 
     if (mode === "approval") {
@@ -770,6 +779,141 @@ async function scanPairForBot(
         await updateBotSignalStatus(env.DB, signal.id, "failed", { errorMessage: msg });
         result.signalsFailed++;
         result.errors.push(`${pair} ${sbSig.direction}: ${msg}`);
+      }
+    }
+
+    return;
+  }
+
+  if (botType === "trendline-v2") {
+    const [candles4H, candlesD] = await Promise.all([
+      cache.getCandles(pair, "4H", 200),
+      cache.getCandles(pair, "D", 30),
+    ]);
+    const atr = calculateATR(candles4H);
+    const dailyBias = getDailyBias(candlesD);
+    const v2Tunables = {
+      ...DEFAULT_TRENDLINE_V2_TUNABLES,
+      ...(ctx.botInstance ? pickTrendlineV2Tunables(ctx.botInstance.settings) : {}),
+    };
+
+    // No new discovery while a line is already active for this pair — only fresh when the
+    // watch-set is empty (cold start, or everything previously retired with nothing replacing it).
+    let activeLines = await getActiveLines(env.DB, botId, pair);
+    if (activeLines.length === 0) {
+      const discovered = discoverLines(candles4H, atr, v2Tunables);
+      const now = Date.now();
+      for (const line of discovered) {
+        await saveDiscoveredLine(env.DB, {
+          id: crypto.randomUUID(), botId, pair,
+          lineType: line.lineType,
+          p1Ts: line.p1Ts, p2Ts: line.p2Ts,
+          p1Price: line.p1Price, p2Price: line.p2Price,
+          slope: line.slope, touches: line.touches,
+          discoveredAt: now, createdAt: now,
+        });
+      }
+      activeLines = await getActiveLines(env.DB, botId, pair);
+    }
+    if (activeLines.length === 0) return;
+
+    const scanResult = scanTrendlineV2(candles4H, activeLines, atr, v2Tunables, dailyBias);
+
+    // A line retires the instant its break is confirmed, independent of whether it produced
+    // a trade — this is what lets a later scan re-discover a fresh line in its place.
+    for (const lineId of scanResult.brokenLineIds) {
+      await retireLine(env.DB, lineId, Date.now());
+    }
+
+    if (!scanResult.entry) return;
+    const tlv2Sig = scanResult.entry;
+    if (tlv2Sig.score < ctx.minConfidenceScore) return;
+
+    result.signalsFound++;
+
+    const lots = calcLots(ctx.riskAmount, pair, tlv2Sig.entryPrice, tlv2Sig.stopLoss);
+    if (lots <= 0) return;
+
+    // Take-profit: the nearest still-active opposite-type line (the just-broken line itself was
+    // already retired above so it can't be picked as its own target) — dynamic, checked every
+    // monitor tick via hasCrossedOppositeLine, not a fixed price. Falls back to a fixed R:R
+    // multiple only if no opposite line is known yet.
+    const remainingActiveLines = await getActiveLines(env.DB, botId, pair);
+    const oppositeLine = pickOppositeLine(remainingActiveLines, tlv2Sig.lineType, candles4H[candles4H.length - 1]!.timestamp);
+    const stopDist = Math.abs(tlv2Sig.entryPrice - tlv2Sig.stopLoss);
+    const takeProfit = oppositeLine
+      ? projectLineAt(oppositeLine, Date.now())
+      : (tlv2Sig.direction === "buy"
+          ? tlv2Sig.entryPrice + stopDist * v2Tunables.fallbackRewardRisk
+          : tlv2Sig.entryPrice - stopDist * v2Tunables.fallbackRewardRisk);
+
+    const signal: BotSignal = {
+      id:               crypto.randomUUID(),
+      botId,
+      pair,
+      direction:        tlv2Sig.direction,
+      entryPrice:       tlv2Sig.entryPrice,
+      stopLoss:         tlv2Sig.stopLoss,
+      takeProfit:       roundPrice(takeProfit, pair),
+      lots,
+      score:            tlv2Sig.score,
+      recommendationId: null,
+      reasons:          tlv2Sig.reasons,
+      status:           "pending",
+      createdAt:        Date.now(),
+      expiresAt:        Date.now() + 4 * 60 * 60 * 1000,
+      executedAt:       null,
+      ctraderPositionId: null,
+      journalId:        null,
+      rejectionReason:  null,
+      errorMessage:     null,
+      source:           'live',
+      backtestRunId:    null,
+      signalType:       "trendline_v2_break_retest",
+      signalTimeframe:  "4H",
+      signalConfidence: tlv2Sig.score,
+      trend:            tlv2Sig.direction === "buy" ? "bullish" : "bearish",
+      structure:        null,
+      mtfBias:          null,
+      mtfLabel:         null,
+      atr:              null,
+      inAoi:            false,
+      fibLabel:         null,
+      tradeClass:       "trendline-v2",
+      zoneType:         null,
+      patternType:      null,
+      outcome:          null,
+      closePrice:       null,
+      closeTime:        null,
+      pnlPips:          null,
+      pnlGbp:           null,
+      lineType:         tlv2Sig.lineType,
+      lineP1Ts:         null,
+      lineP2Ts:         null,
+      zoneLow:          null,
+      zoneHigh:         null,
+      oppositeLineId:   oppositeLine?.id ?? null,
+    };
+
+    if (mode === "approval") {
+      await saveBotSignal(env.DB, signal);
+      result.signalsQueued++;
+    } else {
+      try {
+        if (!ctx.trading) throw new Error("No cTrader token");
+        await saveBotSignal(env.DB, signal);
+        // trailingStopLoss: true — cTrader trails this SL server-side from here on, maintaining
+        // the same distance it was placed at (the retest-based stop distance); no client-side
+        // trail state to store or poll.
+        await executeSignal(signal, env.DB, env.KV, ctx.trading, "limit", true);
+        ctx.openCount++;
+        ctx.openPositionPairs.add(pair);
+        result.signalsExecuted++;
+      } catch (e) {
+        const msg = (e as Error).message;
+        await updateBotSignalStatus(env.DB, signal.id, "failed", { errorMessage: msg });
+        result.signalsFailed++;
+        result.errors.push(`${pair} ${tlv2Sig.direction}: ${msg}`);
       }
     }
 

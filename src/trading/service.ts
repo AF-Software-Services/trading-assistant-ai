@@ -56,6 +56,7 @@ export class TradingService {
     limitPrice?: number;
     stopLoss?:   number;
     takeProfit?: number;
+    trailingStopLoss?: boolean;
   }): Promise<{ orderId: number }> {
     return this.client.placeOrder({
       pair:       params.pair,
@@ -64,6 +65,7 @@ export class TradingService {
       limitPrice: params.limitPrice,
       stopLoss:   params.stopLoss,
       takeProfit: params.takeProfit,
+      trailingStopLoss: params.trailingStopLoss,
     });
   }
 
@@ -90,8 +92,8 @@ export class TradingService {
     return this.client.cancelOrder(orderId);
   }
 
-  async amendPosition(positionId: number, stopLoss: number, takeProfit?: number, pair?: string): Promise<void> {
-    return this.client.amendPosition(positionId, stopLoss, takeProfit, pair);
+  async amendPosition(positionId: number, stopLoss: number, takeProfit?: number, pair?: string, trailingStopLoss?: boolean): Promise<void> {
+    return this.client.amendPosition(positionId, stopLoss, takeProfit, pair, trailingStopLoss);
   }
 
   async getHistory(fromMs: number, toMs: number): Promise<Deal[]> {

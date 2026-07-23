@@ -4,7 +4,7 @@ import type { CurrencyPair } from "../types/market.ts";
 // To add a new bot type: add an entry to BOT_TYPE_REGISTRY with id, displayName,
 // description, and defaultSettings. The engine will pick up the type automatically.
 
-export type BotTypeId = "trendline" | "structure" | "fibonacci" | "session-breakout";
+export type BotTypeId = "trendline" | "structure" | "fibonacci" | "session-breakout" | "trendline-v2";
 
 export interface BotTypeDefinition {
   id:             BotTypeId;
@@ -137,6 +137,35 @@ export const BOT_TYPE_REGISTRY: BotTypeDefinition[] = [
       slBufferAtr:      0.2, // only used by "nearSide" mode
       maxOpenPositions:    2,
       allowDuplicatePairs: false,
+    },
+  },
+  {
+    id:          "trendline-v2",
+    displayName: "Trendline V2",
+    description: "An evolution of the Trendline Bot's break-and-retest concept with a deliberate line lifecycle: lines are discovered once and stay watched until a genuine close-based break retires them permanently, no new lines are discovered while a trade is open on a pair, entry favours the first (earliest-formed) qualifying line, and take-profit is the opposite trendline itself rather than a fixed reward:risk target.",
+    defaultSettings: {
+      minConfidenceScore: 60,
+      riskPercent:        1.0,
+      // Same meaning as the original Trendline Bot's identical settings — reused, not redefined.
+      breakThresholdAtr:  0.5,
+      retestWindowBars:   6,
+      retestRecencyBars:  3,
+      touchToleranceAtr:  0.3,
+      minStopDistAtr:     0.2,
+      minTouches:         2,
+      slBufferAtr:        0.1,
+      // Only used if no opposite-type active line exists yet at entry time to fall back on —
+      // the normal case is a dynamic opposite-line take-profit, not this fixed multiple.
+      fallbackRewardRisk: 2.0,
+      // Trailing is cTrader's own native trailing stop (enabled at order placement), not a
+      // client-side percentage — no separate tunable needed for it.
+      maxOpenPositions:    2,
+      // A second known line breaking on the same pair while a trade from the first line is
+      // still open is meant to open an independent second trade, not be suppressed — the
+      // whole point of the line-lifecycle design. false here would silently gate that off at
+      // the orchestrator level before this bot type's own per-pair discovery-suppression logic
+      // ever runs.
+      allowDuplicatePairs: true,
     },
   },
 ];
